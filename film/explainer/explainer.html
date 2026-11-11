@@ -7,9 +7,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=block" rel="stylesheet">
 <!--
-  The 60-second explainer's picture. Everything on screen is a pure function of time: draw(t) sets every element
-  for instant t, so render.mjs can step it frame by frame and a preview can seek anywhere.
-  It is driven by out/timeline.json (make_audio.py): when each phrase and word is spoken.
+  The explainer's picture. Everything on screen is a pure function of time: draw(t) sets every element for
+  instant t, so render.mjs can step it frame by frame and a preview can seek anywhere. It follows
+  out/timeline.json (make_audio.py): when each phrase and word is spoken, when each recorded take plays and what
+  the daemon reported during it. The takes' frames come from the launch film's cut (../out/frames/<shot>/).
     render:   node render.mjs          preview with sound:   node render.mjs --serve
 -->
 <style>
@@ -24,20 +25,14 @@
            transform-origin: 0 0; flex: none; }
   #stage > * { position: absolute; }
   svg { overflow: visible; }
-  .abs { position: absolute; }
-  .hide { display: none !important; }
 
   /* kinetic type */
   .kl { white-space: nowrap; letter-spacing: -0.035em; line-height: 1.04; font-weight: 800; }
   .kl .w { display: inline-block; margin-right: .24em; will-change: transform, opacity; position: relative; }
   .kl .w:last-child { margin-right: 0; }
   .kl .e { color: var(--blue); }
-  .kl .strike::after, .kl .under::after { content: ""; position: absolute; left: -2%; height: .085em; width: 104%;
-       background: var(--blue); transform-origin: 0 50%; transform: scaleX(var(--s, 0)); border-radius: 99px; }
-  .kl .strike::after { top: 52%; background: var(--ink); }
-  .kl .under::after { bottom: -.06em; }
 
-  /* the Silky overlay, redrawn light */
+  /* the Silky overlay, redrawn light for the illustrated scenes */
   #overlay { left: 1430px; top: 56px; width: 434px; height: 152px; background: var(--card); border: 1.5px solid var(--edge);
              border-radius: 22px; box-shadow: 0 18px 50px -18px rgba(15, 23, 42, .25); display: flex; align-items: center;
              gap: 22px; padding: 0 26px; box-sizing: border-box; }
@@ -64,6 +59,27 @@
   .pill { font: 600 18px Inter; color: #fff; background: var(--blue); padding: 6px 14px; border-radius: 99px; white-space: nowrap; }
   .card { background: var(--card); border: 1.5px solid var(--edge); border-radius: 28px;
           box-shadow: 0 30px 60px -30px rgba(15, 23, 42, .25); }
+
+  /* the recorded takes */
+  #take { left: 188px; top: 128px; width: 1544px; height: 820px; border-radius: 24px; overflow: hidden; background: #0B1220;
+          box-shadow: 0 40px 90px -40px rgba(15, 23, 42, .55); }
+  #take img { position: absolute; left: 0; top: 0; width: 1544px; height: 820px; transform-origin: 0 0; }
+  #take .flash { position: absolute; inset: 0; background: #fff; }
+  #take .cut { position: absolute; left: 24px; top: 22px; font: 600 16px Inter; color: #fff; background: rgba(15, 23, 42, .78);
+               border: 1.5px solid rgba(255, 255, 255, .25); padding: 7px 14px; border-radius: 99px; letter-spacing: .02em; }
+  #take .log { position: absolute; left: 28px; bottom: 26px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .say { font: 600 28px Inter; letter-spacing: -.01em; color: var(--ink); background: #fff; padding: 14px 22px;
+         border-radius: 22px 22px 22px 6px; display: flex; gap: 12px; align-items: center; white-space: nowrap;
+         box-shadow: 0 16px 40px -16px rgba(0, 0, 0, .6); }
+  .say.silky { background: var(--blue); color: #fff; border-radius: 22px 22px 6px 22px; font-weight: 500; }
+  .say .w { display: inline-block; }
+  .step { font: 600 19px Inter; color: #fff; background: rgba(37, 99, 235, .92); padding: 7px 14px; border-radius: 99px;
+          white-space: nowrap; font-variant-numeric: tabular-nums; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .6); }
+  .step b { font-weight: 800; }
+  #takeHead { left: 188px; top: 44px; width: 1544px; height: 60px; }
+  #takeHead .real { position: absolute; right: 0; top: 10px; display: flex; gap: 14px; align-items: center; }
+  #takeHead .rec { width: 12px; height: 12px; border-radius: 50%; background: #EF4444; display: inline-block; margin-right: 8px; }
+
   #beats { left: 140px; top: 1000px; display: flex; gap: 12px; align-items: center; }
   #beats i { width: 56px; height: 5px; border-radius: 9px; background: var(--edge); display: block; }
   #beats span { font: 600 14px Inter; letter-spacing: .16em; color: var(--slate); text-transform: uppercase; margin-left: 10px; }
@@ -83,7 +99,7 @@ const p = (t, a, d) => clamp((t - a) / d);                   // progress of a mo
 const eo = (x) => 1 - Math.pow(1 - x, 3);
 const eio = (x) => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 const back = (x) => { const c = 1.6; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
-const win = (t, a, b, fi = .4, fo = .4) => Math.min(eo(p(t, a, fi)), 1 - eio(p(t, b - fo, fo)));  // in at a, out by b
+const win = (t, a, b, fi = .3, fo = .3) => Math.min(eo(p(t, a, fi)), 1 - eio(p(t, b - fo, fo)));  // in at a, out by b
 const NS = "http://www.w3.org/2000/svg";
 const stage = document.getElementById("stage");
 function S(tag, attrs = {}, parent) {
@@ -114,7 +130,7 @@ function sshow(el, a, transform) {
 
 // ------------------------------------------------------------------ timeline
 let T = null;
-const P = (id) => T.byId[id];               // a phrase: {t0, t1, words}
+const P = (id) => T.byId[id];               // a phrase {t0, t1, words} or a take {t0, t1, notes, cuts, ...}
 const norm = (w) => w.toLowerCase().replace(/[^a-z0-9']/g, "");
 // when a displayed word is spoken: the first unused spoken word that matches it, else just after the last one
 function wordTimes(id, shown) {
@@ -123,7 +139,7 @@ function wordTimes(id, shown) {
   for (const w of shown) {
     let hit = -1;
     for (let j = k; j < said.length; j++) if (norm(said[j].w) === norm(w)) { hit = j; break; }
-    if (hit >= 0) { last = said[hit].t0; k = hit + 1; } else last += 0.1;
+    if (hit >= 0) { last = said[hit].t0; k = hit + 1; } else last += 0.08;
     out.push(last);
   }
   return out;
@@ -131,16 +147,13 @@ function wordTimes(id, shown) {
 
 // ------------------------------------------------------------------ kinetic lines
 const lines = [];
-// o: {id, x, y, size, parts: [[text, style]], align, out, dx, dy, weight, color, at (fixed reveal, overrides speech)}
+// o: {id, x, y, size, parts: [[text, style]], align, out, dx, dy, weight, color, at (a fixed time instead of the speech)}
 function kline(o) {
   const d = H("div", "kl", stage, null, { top: px(o.y), fontSize: px(o.size), fontWeight: o.weight || 800, color: o.color || INK });
   if (o.align === "center") Object.assign(d.style, { left: "0px", width: "1920px", textAlign: "center" });
   else d.style.left = px(o.x);
   const spans = [];
-  for (const [text, style] of o.parts) for (const w of text.split(" ")) {
-    const s = H("span", "w" + (style ? " " + style.split(" ").map((c) => c === "e" ? "e" : c).join(" ") : ""), d, w);
-    spans.push(s);
-  }
+  for (const [text, style] of o.parts) for (const w of text.split(" ")) spans.push(H("span", "w" + (style ? " " + style : ""), d, w));
   const L = { o, d, spans, at: [] };
   lines.push(L);
   return L;
@@ -148,30 +161,28 @@ function kline(o) {
 function timeLines() {
   for (const L of lines) {
     const shown = L.spans.map((s) => s.textContent);
-    L.at = L.o.at != null ? shown.map((_, i) => L.o.at + i * (L.o.step ?? 0.09)) : wordTimes(L.o.id, shown);
+    const at = typeof L.o.at === "function" ? L.o.at() : L.o.at;
+    L.at = at != null ? shown.map((_, i) => at + i * (L.o.step ?? 0.07)) : wordTimes(L.o.id, shown);
     L.outAt = typeof L.o.out === "function" ? L.o.out() : L.o.out;
   }
 }
 function drawLines(t) {
   for (const L of lines) {
-    const first = L.at[0], gone = t > L.outAt + 0.6;
-    if (t < first - 0.1 || gone) { L.d.style.display = "none"; continue; }
+    if (t < L.at[0] - 0.1 || t > L.outAt + 0.5) { L.d.style.display = "none"; continue; }
     L.d.style.display = "";
-    const e = eio(p(t, L.outAt, 0.45));
+    const e = eio(p(t, L.outAt, 0.35));
     L.d.style.opacity = 1 - e;
     L.d.style.transform = `translate(${(L.o.dx ?? 0) * e}px, ${(L.o.dy ?? -30) * e}px)`;
     L.spans.forEach((s, i) => {
-      const a = eo(p(t, L.at[i] - 0.06, 0.34));
-      const pop = s.classList.contains("e") ? lerp(1.18, 1, eo(p(t, L.at[i] - 0.06, 0.5))) : 1;
+      const a = eo(p(t, L.at[i] - 0.05, 0.26));
+      const pop = s.classList.contains("e") ? lerp(1.18, 1, eo(p(t, L.at[i] - 0.05, 0.4))) : 1;
       s.style.opacity = a;
       s.style.transform = `translateY(${(1 - a) * 0.42}em) scale(${pop})`;
-      if (s.classList.contains("strike") || s.classList.contains("under"))
-        s.style.setProperty("--s", eio(p(t, L.at[i] + (L.o.lineDelay ?? 0.35), 0.4)));
     });
   }
 }
 
-// ------------------------------------------------------------------ icons (all 2px-ish strokes, drawn in a 100-unit box)
+// ------------------------------------------------------------------ icons (drawn in a 100-unit box)
 function icon(kind, parent, color = INK, w = 5) {
   const g = S("g", { fill: "none", stroke: color, "stroke-width": w, "stroke-linecap": "round", "stroke-linejoin": "round" }, parent);
   const d = {
@@ -187,7 +198,6 @@ function icon(kind, parent, color = INK, w = 5) {
     pause: "M38 30v40 M62 30v40",
     diamond: "M50 22l28 28-28 28-28-28z",
     bolt: "M54 14L26 56h22l-4 30 30-44H52z",
-    check: "M26 52l16 16 34-36",
   }[kind];
   S("path", { d }, g);
   return g;
@@ -197,24 +207,21 @@ function icon(kind, parent, color = INK, w = 5) {
 const world = S("svg", { width: 1920, height: 1080, viewBox: "0 0 1920 1080" });
 stage.appendChild(world);
 const cam = S("g", {}, world);
-const LAP = { x: 680, y: 360, w: 560, h: 350, cx: 960, cy: 535 };
+const LAP = { cx: 960, cy: 535 };
 const lap = S("g", {}, cam);
-const lapScreen = S("rect", { x: LAP.x, y: LAP.y, width: LAP.w, height: LAP.h, rx: 22, fill: "#fff", stroke: INK, "stroke-width": 4, pathLength: 1 }, lap);
-const lapBase = S("path", { d: "M600 712h720a0 0 0 0 1 0 0l-26 22a14 14 0 0 1-9 4H635a14 14 0 0 1-9-4z", fill: "#fff", stroke: INK, "stroke-width": 4, "stroke-linejoin": "round", pathLength: 1 }, lap);
+const lapScreen = S("rect", { x: 680, y: 360, width: 560, height: 350, rx: 22, fill: "#fff", stroke: INK, "stroke-width": 4, pathLength: 1 }, lap);
+const lapBase = S("path", { d: "M600 712h720l-26 22a14 14 0 0 1-9 4H635a14 14 0 0 1-9-4z", fill: "#fff", stroke: INK, "stroke-width": 4, "stroke-linejoin": "round", pathLength: 1 }, lap);
 const lapNotch = S("path", { d: "M900 712h120v6a6 6 0 0 1-6 6h-108a6 6 0 0 1-6-6z", fill: EDGE }, lap);
-// voice waveform on the laptop screen; it travels to the cloud and back
 const wave = S("g", {}, cam);
 const waveBars = [...Array(9)].map((_, i) => S("rect", { x: -88 + i * 20, width: 10, rx: 5, fill: BLUE }, wave));
-// the cloud and its servers
-const cloud = S("g", { transform: "translate(1520 230)" }, cam);
+const cloud = S("g", {}, cam);
 S("path", { d: "M-78 44h150a44 44 0 0 0 4-88 62 62 0 0 0-118-12A48 48 0 0 0-78 44z", fill: "#fff", stroke: INK, "stroke-width": 4, "stroke-linejoin": "round" }, cloud);
-const servers = S("g", { transform: "translate(1690 175)" }, cam);
+const servers = S("g", {}, cam);
 for (let i = 0; i < 3; i++) {
   S("rect", { x: 0, y: i * 40, width: 92, height: 32, rx: 8, fill: "#fff", stroke: INK, "stroke-width": 3.5 }, servers);
   S("circle", { cx: 18, cy: i * 40 + 16, r: 4, fill: BLUE }, servers);
   S("path", { d: `M40 ${i * 40 + 16}h36`, stroke: LINE, "stroke-width": 4, "stroke-linecap": "round" }, servers);
 }
-// packets flowing laptop -> cloud along a curve
 const NET = [[1170, 420], [1330, 260], [1440, 250]];
 const bez = (u) => { const [a, b, c] = NET; return [lerp(lerp(a[0], b[0], u), lerp(b[0], c[0], u), u), lerp(lerp(a[1], b[1], u), lerp(b[1], c[1], u), u)]; };
 const packets = [...Array(16)].map(() => S("circle", { r: 4.5, fill: BLUE }, cam));
@@ -222,18 +229,16 @@ const lock = S("g", {}, cam);
 S("rect", { x: -22, y: -6, width: 44, height: 34, rx: 8, fill: "#fff", stroke: INK, "stroke-width": 4 }, lock);
 const shackle = S("path", { d: "M-12 -6v-10a12 12 0 0 1 24 0v10", fill: "none", stroke: INK, "stroke-width": 4, "stroke-linecap": "round" }, lock);
 S("circle", { cx: 0, cy: 11, r: 3.5, fill: INK }, lock);
-// beat 2/5: models inside the laptop, and the device boundary
 const models = ["ear", "brain", "speaker"].map((k, i) => {
   const g = S("g", {}, cam);
-  const ic = icon(k, g, BLUE, 5);
-  ic.setAttribute("transform", "translate(-38 -50) scale(.76)");
+  icon(k, g, BLUE, 5).setAttribute("transform", "translate(-38 -50) scale(.76)");
   S("text", { y: 54, "text-anchor": "middle", "font-family": "Inter", "font-weight": 600, "font-size": 20, fill: SLATE }, g).textContent = ["hear", "think", "speak"][i];
   return g;
 });
-const fence = S("rect", { x: 560, y: 310, width: 800, height: 470, rx: 40, fill: "none", stroke: BLUE, "stroke-width": 4, "stroke-dasharray": "14 12", pathLength: 1000 }, cam);
+const fence = S("rect", { x: 560, y: 310, width: 800, height: 470, rx: 40, fill: "none", stroke: BLUE, "stroke-width": 4, "stroke-dasharray": "14 12" }, cam);
 const fenceTag = H("div", "pill", stage, "on this laptop", { left: "590px", top: "290px" });
-const ringOnLap = S("g", { transform: "translate(960 535)" }, cam);
-const ringLapBase = S("circle", { r: 54, fill: "none", stroke: SOFT, "stroke-width": 10 }, ringOnLap);
+const ringOnLap = S("g", {}, cam);
+S("circle", { r: 54, fill: "none", stroke: SOFT, "stroke-width": 10 }, ringOnLap);
 const ringLapDot = S("circle", { r: 22, fill: BLUE }, ringOnLap);
 
 // ------------------------------------------------------------------ the desktop (beats 2 and 3)
@@ -241,8 +246,7 @@ const desk = H("div", "", stage, null, { left: 0, top: 0, width: "1920px", heigh
 const task = H("div", "", desk, null, { position: "absolute", left: 0, bottom: 0, width: "1920px", height: "64px", borderTop: "1.5px solid " + EDGE, background: "#FBFCFE" });
 for (let i = 0; i < 5; i++) H("div", "", task, null, { position: "absolute", left: px(860 + i * 44), top: "18px", width: "28px", height: "28px", borderRadius: "8px", background: i === 2 ? SOFT : EDGE });
 
-// the overlay
-const ov = H("div", "", stage, null, {}); ov.id = "overlay";
+const ov = H("div", "", stage); ov.id = "overlay";
 const ovRing = S("svg", { width: 76, height: 76, viewBox: "-38 -38 76 76" }); ov.appendChild(ovRing);
 S("circle", { r: 30, fill: "none", stroke: SOFT, "stroke-width": 6 }, ovRing);
 const ovArc = S("circle", { r: 30, fill: "none", stroke: BLUE, "stroke-width": 6, "stroke-linecap": "round", pathLength: 100, transform: "rotate(-90)", "stroke-dasharray": "0 100" }, ovRing);
@@ -253,22 +257,19 @@ H("div", "name", ovTxt, "SILKY");
 const ovStatus = H("div", "status", ovTxt, "Listening");
 const ovMeta = H("div", "meta", ovTxt);
 const ovChip = H("span", "chip", ovMeta, "");
-const ovTiming = H("span", "timing", ovMeta, "");
 
 // ------------------------------------------------------------------ beat 1 type
-kline({ id: "p1", x: 140, y: 118, size: 78, parts: [["Every time you", ""], ["talk", "e"]], out: () => P("p3").t0 - 0.45 });
-kline({ id: "p2", x: 140, y: 210, size: 78, parts: [["your voice", ""], ["leaves the room.", "e"]], out: () => P("p3").t0 - 0.45, dx: 160, dy: 0 });
-kline({ id: "p3", align: "center", y: 150, size: 104, parts: [["What if it", ""], ["didn't?", "e"]], out: () => P("p4").t0 - 0.75 });
+kline({ id: "p1", x: 140, y: 118, size: 78, parts: [["Every time you", ""], ["talk", "e"]], out: () => P("p3").t0 - 0.35 });
+kline({ id: "p2", x: 140, y: 210, size: 78, parts: [["your voice", ""], ["leaves the room.", "e"]], out: () => P("p3").t0 - 0.35, dx: 160, dy: 0 });
+kline({ id: "p3", align: "center", y: 150, size: 104, parts: [["What if it", ""], ["didn't?", "e"]], out: () => P("p4").t0 - 0.6 });
 
 // ------------------------------------------------------------------ beat 2
 const wordmark = H("div", "kl", stage, 'Silky<span style="color:#2563EB">.</span>', { left: 0, width: "1920px", textAlign: "center", top: "430px", fontSize: "190px" });
-kline({ id: "p5", x: 140, y: 300, size: 84, parts: [["Say its", ""], ["name.", "e"]], out: () => P("p6").t0 - 0.3 });
-kline({ id: "p5", x: 140, y: 392, size: 84, parts: [["Say what you", ""], ["want.", "e"]], out: () => P("p6").t0 - 0.3 });
-const bubble1 = H("div", "bubble", stage, "");
+kline({ id: "p5", x: 140, y: 300, size: 84, parts: [["Say its", ""], ["name.", "e"]], out: () => P("p6").t0 - 0.2 });
+kline({ id: "p5", x: 140, y: 392, size: 84, parts: [["Say what you", ""], ["want.", "e"]], out: () => P("p6").t0 - 0.2 });
+const bubble1 = H("div", "bubble", stage, "", { left: "140px", top: "560px" });
 const micG = S("svg", { width: 34, height: 34, viewBox: "0 0 100 100" }); icon("mic", micG, BLUE, 8); bubble1.appendChild(micG);
 H("span", "", bubble1, "“Silky, open the calculator”");
-Object.assign(bubble1.style, { left: "140px", top: "560px" });
-// calculator
 const calc = H("div", "win", stage, null, { left: "1010px", top: "270px", width: "400px", height: "600px" });
 H("div", "bar", calc, '<i class="dot"></i><i class="dot"></i><i class="dot"></i><span style="margin-left:10px">Calculator</span>');
 H("div", "", calc, "0", { font: "300 84px Inter", textAlign: "right", padding: "26px 30px 18px", letterSpacing: "-.03em" });
@@ -276,72 +277,102 @@ const keys = H("div", "", calc, null, { display: "grid", gridTemplateColumns: "r
 ["C", "±", "%", "÷", "7", "8", "9", "×", "4", "5", "6", "−", "1", "2", "3", "+", "0", ".", "⌫", "="].forEach((k, i) =>
   H("div", "", keys, k, { height: "62px", borderRadius: "14px", display: "grid", placeItems: "center", font: "500 24px Inter",
     background: k === "=" ? BLUE : (i % 4 === 3 ? MIST : "#F1F5F9"), color: k === "=" ? "#fff" : (i % 4 === 3 ? BLUE : INK) }));
-kline({ id: "p6", align: "center", y: 120, size: 76, parts: [["Models", ""], ["on your own laptop.", "e"]], out: () => P("p7").t0 - 0.5 });
+kline({ id: "p6", align: "center", y: 120, size: 76, parts: [["Models", ""], ["on your own laptop", "e"], ["do the rest.", ""]], out: () => P("p7").t0 - 0.35 });
 
-// ------------------------------------------------------------------ beat 3: four vignettes
-// 1 · fix the selection
-const s7 = H("div", "", stage, null, { left: 0, top: 0, width: "1920px", height: "1080px" });
-const ed = H("div", "win", s7, null, { position: "absolute", left: "720px", top: "260px", width: "1060px", height: "560px" });
-H("div", "bar", ed, '<i class="dot"></i><i class="dot"></i><i class="dot"></i><span style="margin-left:10px">meeting-notes.txt</span>');
-const edBody = H("div", "", ed, null, { position: "relative", padding: "44px 56px" });
-const bars = (parent, widths, top) => widths.forEach((w, i) => H("div", "", parent, null, { position: "absolute", left: "56px", top: px(top + i * 46), width: px(w), height: "14px", borderRadius: "8px", background: "#EEF2F7" }));
-bars(edBody, [820, 700], 50);
-bars(edBody, [880, 760, 540], 286);
-const sel = H("div", "", edBody, null, { position: "absolute", left: "48px", top: "168px", height: "62px", borderRadius: "10px", background: SOFT, width: "0px" });
-const shimmer = H("div", "", edBody, null, { position: "absolute", left: "48px", top: "168px", height: "62px", width: "160px", borderRadius: "10px",
-  background: "linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.9), rgba(255,255,255,0))" });
-const wrong = H("div", "", edBody, 'their going to review <u style="text-decoration-color:#2563EB;text-decoration-style:wavy">the the</u> report <u style="text-decoration-color:#2563EB;text-decoration-style:wavy">tomorow</u>', { position: "absolute", left: "64px", top: "176px", font: "500 36px Inter", letterSpacing: "-.01em", whiteSpace: "nowrap" });
-const right = H("div", "", edBody, "They’re going to review the report tomorrow.", { position: "absolute", left: "64px", top: "176px", font: "500 36px Inter", letterSpacing: "-.01em", whiteSpace: "nowrap" });
-kline({ id: "p7", x: 140, y: 300, size: 150, parts: [["Fix", "e"]], out: () => P("p8").t0 - 0.45, dx: -80, dy: 0 });
-kline({ id: "p7", x: 146, y: 476, size: 50, weight: 700, parts: [["what you've selected.", ""]], out: () => P("p8").t0 - 0.45, dx: -80, dy: 0 });
+// ------------------------------------------------------------------ beat 3a: the recorded takes
+const takeHead = H("div", ""); takeHead.id = "takeHead";
+const realTag = H("div", "real", takeHead, '<span class="pill"><i class="rec"></i>REAL RECORDING</span><span class="small">RTX 3050 laptop · real time · its own sound</span>');
+const take = H("div", ""); take.id = "take";
+const takeImg = H("img", "", take); takeImg.alt = "";
+const flash = H("div", "flash", take);
+const cutTag = H("div", "cut", take, "");
+const log = H("div", "log", take);
+kline({ id: "p7", x: 188, y: 50, size: 52, parts: [["Here it is,", ""], ["for real.", "e"]], out: () => P("F1").t0 + 0.25 });
+kline({ id: "F1", x: 188, y: 50, size: 52, parts: [["Fix the grammar of", ""], ["what I selected", "e"]], at: () => P("F1").t0 + 0.3, out: () => P("p8").t0 - 0.2 });
+kline({ id: "p8", x: 188, y: 50, size: 52, parts: [["It finds files by", ""], ["what they're about.", "e"]], out: () => P("F2").t0 + 0.4 });
+kline({ id: "F2", x: 188, y: 50, size: 52, parts: [["Find files by", ""], ["meaning", "e"]], at: () => P("F2").t0 + 0.45, out: () => P("F2").t1 - 0.2 });
+// camera moves inside the take, in the recording's own pixels (1920x1020): [shot seconds, centre x, centre y, zoom]
+const MOVES = {
+  grammar: [[0, 960, 510, 1], [3.7, 960, 510, 1], [4.8, 800, 400, 1.55]],
+  files: [[0, 960, 510, 1], [4.7, 960, 510, 1], [5.7, 1715, 230, 2.25]],   // its overlay hides while the command is spoken
+};
+const camAt = (shot, s) => {
+  const m = MOVES[shot];
+  let i = 0; while (i < m.length - 1 && s >= m[i + 1][0]) i++;
+  if (i === m.length - 1) return m[i].slice(1);
+  const k = eio(clamp((s - m[i][0]) / (m[i + 1][0] - m[i][0])));
+  return [1, 2, 3].map((j) => lerp(m[i][j], m[i + 1][j], k));
+};
+// the daemon's log for each take, as chips: built once the timeline is known
+let logItems = [];
+function buildLog() {
+  for (const id of ["F1", "F2"]) {
+    const f = P(id);
+    const cmd = H("div", "say", log, "");
+    const mic = S("svg", { width: 28, height: 28, viewBox: "0 0 100 100" }); icon("mic", mic, BLUE, 9); cmd.appendChild(mic);
+    const wrap = H("span", "", cmd);
+    const words = f.command.split(" ").map((w) => { const s = H("span", "", wrap, w); wrap.append(" "); return s; });
+    // the command is spoken from about 0.35 s into the take for about 3.3 s (the synthesized voice in the take)
+    logItems.push({ el: cmd, id, t0: f.t0 + 0.1, words, wt: words.map((_, i) => f.t0 + 0.15 + i * 3.2 / words.length) });
+    for (const n of f.notes) {
+      let html = null, cls = "step";
+      if (n.type === "timing" && n.step === "decide") html = `chose a tool · <b>${(n.ms / 1000).toFixed(2)} s</b>`;
+      if (n.type === "done") html = `${n.name.replaceAll("_", " ")} ✓ · <b>${n.ms} ms</b>`;
+      if (n.type === "card") html = `showed ${n.title}`;
+      if (n.type === "timing" && n.step === "reply") html = `wrote the reply · <b>${(n.ms / 1000).toFixed(2)} s</b>`;
+      if (n.type === "said") { html = "“" + n.text.replace(/^"|"$/g, "").replace(/"/g, "") + "”"; cls = "say silky"; }
+      if (html) logItems.push({ el: H("div", cls, log, html), id, t0: n.t, said: n.type === "said" });
+    }
+  }
+}
+function drawTake(t) {
+  const F1 = P("F1"), F2 = P("F2");
+  const on = win(t, P("p7").t0 + 0.1, F2.t1 + 0.15, 0.4, 0.4);
+  const rise = (1 - eo(p(t, P("p7").t0 + 0.1, 0.5))) * 60, leave = eio(p(t, F2.t1 - 0.25, 0.4)) * -60;
+  show(take, on, `translateY(${rise + leave}px)`);
+  show(takeHead, on);
+  show(realTag, Math.min(on, eo(p(t, P("p7").t0 + 0.4, 0.3))));
+  if (on <= 0) return;
+  // which take, and where in it: before F1 hold its first frame, between the two hold F1's last then F2's first
+  const f = t < (F1.t1 + P("p8").t0) / 2 + 0.25 ? F1 : F2;
+  const s = clamp(t - f.t0, 0, f.t1 - f.t0) + f.from;
+  const n = Math.min(f.frames, Math.max(1, Math.floor(s * 30) + 1));
+  const src = `../out/frames/${f.shot}/${String(n).padStart(5, "0")}.jpg`;
+  if (!takeImg.src.endsWith(src.slice(2))) takeImg.src = src;
+  const [cx, cy, z] = camAt(f.shot, s), k = 1544 / 1920, W = 1544, Hh = 820;
+  const tx = clamp(W / 2 - z * cx * k, W - z * W, 0), ty = clamp(Hh / 2 - z * cy * k, Hh - z * Hh, 0);
+  takeImg.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
+  // the swap between the takes dips through the frame's dark background
+  const swap = (F1.t1 + P("p8").t0) / 2 + 0.25;
+  takeImg.style.opacity = 1 - Math.max(0, 1 - Math.abs(t - swap) / 0.25);
+  // a cut already in the take is marked, the way the launch film does
+  const c = f.cuts.find((c) => t >= c.t - 0.05 && t < c.t + 1.6);
+  show(cutTag, c ? win(t, c.t, c.t + 1.6, 0.15, 0.3) : 0);
+  if (c) cutTag.textContent = `cut · ${c.skipped} s skipped`;
+  show(flash, c ? 0.5 * (1 - p(t, c.t, 0.18)) : 0);
+  // the log: the newest few entries of the current take
+  const live = logItems.filter((it) => it.id === (f === F1 ? "F1" : "F2") && t >= it.t0 - 0.05 && t < f.t1 + 0.6);
+  const keep = new Set(live.filter((it) => !it.said).slice(-3).concat(live.filter((it) => it.said).slice(-1)));
+  for (const it of logItems) {
+    const vis = keep.has(it);
+    const a = vis ? eo(p(t, it.t0, 0.25)) : 0;
+    show(it.el, a * (it.id === "F1" ? 1 - eio(p(t, P("p8").t0, 0.3)) : 1), `translateY(${(1 - a) * 16}px) scale(${lerp(.92, 1, back(p(t, it.t0, 0.3)))})`);
+    if (it.words) it.words.forEach((w, i) => (w.style.opacity = eo(p(t, it.wt[i], 0.2))));
+  }
+}
 
-// 2 · files by meaning
-const s8 = H("div", "", stage, null, { left: 0, top: 0, width: "1920px", height: "1080px" });
-const bubble2 = H("div", "bubble", s8, "", { position: "absolute", left: "860px", top: "250px", fontSize: "26px", padding: "14px 22px" });
-const mic2 = S("svg", { width: 28, height: 28, viewBox: "0 0 100 100" }); icon("mic", mic2, BLUE, 8); bubble2.appendChild(mic2);
-H("span", "", bubble2, "“find my notes about op-amps”");
-const TILES = ["op-amp lab notes", "rent receipt", "filter design ch.4", "trip packing list", "circuits midterm review", "pasta recipe"];
-const MATCH = [0, 2, 4];
-const tiles = TILES.map((name, i) => {
-  const d = H("div", "win", s8, null, { position: "absolute", left: px(860 + (i % 3) * 310), top: px(360 + Math.floor(i / 3) * 250), width: "280px", height: "210px", borderRadius: "18px" });
-  const g = S("svg", { width: 70, height: 70, viewBox: "0 0 100 100", style: "position:absolute;left:22px;top:22px" }); icon("doc", g, SLATE, 5); d.appendChild(g);
-  bars(d, [150, 110], 40); [...d.children].slice(-2).forEach((b) => (b.style.left = "110px", b.style.height = "10px"));
-  H("div", "label", d, name, { position: "absolute", left: "24px", bottom: "22px", fontSize: "20px" });
-  return d;
-});
-const found = H("div", "win", s8, null, { position: "absolute", left: "860px", top: "360px", width: "900px", height: "470px" });
-H("div", "bar", found, '<span style="letter-spacing:.16em;font-size:14px">FOUND FILES</span><span style="margin-left:auto;color:#2563EB">op-amps</span>');
-const ROWS = [["op-amp lab notes.pdf", "Documents › EE", 0.92], ["filter design ch.4.docx", "Documents › Courses", 0.74], ["circuits midterm review.pdf", "Downloads", 0.6]];
-const rows = ROWS.map(([name, where, rel], i) => {
-  const r = H("div", "", found, null, { position: "relative", height: "118px", display: "flex", alignItems: "center", gap: "22px", padding: "0 30px", borderBottom: i < 2 ? "1.5px solid " + EDGE : "none" });
-  const g = S("svg", { width: 56, height: 56, viewBox: "0 0 100 100" }); icon("doc", g, BLUE, 6); r.appendChild(g);
-  const t = H("div", "", r, null, { flex: "1" });
-  H("div", "label", t, name); H("div", "small", t, where, { marginTop: "4px" });
-  const track = H("div", "", r, null, { width: "220px", height: "10px", borderRadius: "9px", background: "#EEF2F7", overflow: "hidden" });
-  const fill = H("div", "", track, null, { height: "100%", background: BLUE, borderRadius: "9px", width: "0%" });
-  return { r, fill, rel };
-});
-const cursor = S("svg", { width: 40, height: 40, viewBox: "0 0 40 40", style: "position:absolute" });
-S("path", { d: "M6 4l26 14-12 3-6 12z", fill: INK, stroke: "#fff", "stroke-width": 2.5, "stroke-linejoin": "round" }, cursor);
-s8.appendChild(cursor);
-const ripple = H("div", "", s8, null, { position: "absolute", width: "60px", height: "60px", borderRadius: "50%", border: "3px solid " + BLUE });
-kline({ id: "p8", x: 140, y: 376, size: 58, parts: [["by what", ""], ["they're about,", "e"]], out: () => P("p10").t0 - 0.45, dx: -80, dy: 0 });
-kline({ id: "p9", x: 140, y: 452, size: 58, parts: [["not what they're", ""], ["called.", "strike"]], out: () => P("p10").t0 - 0.45, dx: -80, dy: 0, lineDelay: 0.25 });
-kline({ id: "p8", x: 140, y: 300, size: 58, parts: [["Find files", ""]], out: () => P("p10").t0 - 0.45, dx: -80, dy: 0 });
-
-// 3 · watch the screen
+// ------------------------------------------------------------------ beat 3b: two quick illustrated scenes
 const s9 = H("div", "", stage, null, { left: 0, top: 0, width: "1920px", height: "1080px" });
 const dl = H("div", "win", s9, null, { position: "absolute", left: "940px", top: "380px", width: "820px", height: "300px" });
 H("div", "bar", dl, '<i class="dot"></i><i class="dot"></i><i class="dot"></i><span style="margin-left:10px">Downloads</span>');
 const dlBody = H("div", "", dl, null, { padding: "40px 48px" });
-const dlName = H("div", "label", dlBody, "dataset-2026.zip", { fontSize: "26px" });
+H("div", "label", dlBody, "dataset-2026.zip", { fontSize: "26px" });
 const dlTrack = H("div", "", dlBody, null, { marginTop: "26px", height: "18px", borderRadius: "99px", background: "#EEF2F7", overflow: "hidden" });
 const dlFill = H("div", "", dlTrack, null, { height: "100%", width: "0%", background: BLUE, borderRadius: "99px" });
 const dlPct = H("div", "small", dlBody, "0%", { marginTop: "18px", fontVariantNumeric: "tabular-nums", fontSize: "20px" });
-kline({ id: "p10", x: 140, y: 350, size: 84, parts: [["Watch", "e"], ["the screen,", ""]], out: () => P("p12").t0 - 0.4, dx: -80, dy: 0 });
-kline({ id: "p11", x: 144, y: 452, size: 42, weight: 700, color: SLATE, parts: [["and tell me when it's done.", ""]], out: () => P("p12").t0 - 0.4, dx: -80, dy: 0 });
+kline({ id: "p9", x: 140, y: 360, size: 90, parts: [["It", ""], ["watches", "e"]], out: () => P("p10").t0 - 0.3, dx: -80, dy: 0 });
+kline({ id: "p9", x: 144, y: 466, size: 46, weight: 700, color: SLATE, parts: [["the screen for you.", ""]], out: () => P("p10").t0 - 0.3, dx: -80, dy: 0 });
 
-// 4 · memory
 const s10 = H("div", "", stage, null, { left: 0, top: 0, width: "1920px", height: "1080px" });
 const memChip = H("div", "chip", s10, "remember · bike lock code", { position: "absolute", left: "980px", top: "300px", fontSize: "22px", padding: "10px 20px" });
 const padlock = S("svg", { width: 640, height: 470, viewBox: "0 0 640 470", style: "position:absolute;left:900px;top:380px" });
@@ -352,18 +383,16 @@ const dials = [4, 1, 7, 2].map((digit, i) => {
   const x = 130 + i * 102;
   S("rect", { x, y: 240, width: 82, height: 150, rx: 16, fill: MIST, stroke: SOFT, "stroke-width": 3 }, padlock);
   const clip = S("clipPath", { id: "dial" + i }, padlock); S("rect", { x, y: 240, width: 82, height: 150, rx: 16 }, clip);
-  const g = S("g", { "clip-path": `url(#dial${i})` }, padlock);
-  const strip = S("g", {}, g);
-  for (let n = 0; n < 12; n++) {
-    const tx = S("text", { x: x + 41, y: 339 + n * 150, "text-anchor": "middle", "font-family": "Inter", "font-weight": 800, "font-size": 68, fill: INK }, strip);
-    tx.textContent = (n + 1) % 10;
-  }
+  const strip = S("g", {}, S("g", { "clip-path": `url(#dial${i})` }, padlock));
+  for (let n = 0; n < 12; n++)
+    S("text", { x: x + 41, y: 339 + n * 150, "text-anchor": "middle", "font-family": "Inter", "font-weight": 800, "font-size": 68, fill: INK }, strip).textContent = (n + 1) % 10;
   return { strip, digit };
 });
-kline({ id: "p12", x: 140, y: 380, size: 110, parts: [["It", ""], ["remembers.", "e"]], out: () => P("p13").t0 - 0.75, dx: -80, dy: 0 });
+kline({ id: "p10", x: 140, y: 380, size: 110, parts: [["It", ""], ["remembers.", "e"]], out: () => P("p11").t0 - 0.5, dx: -80, dy: 0 });
 
 // ------------------------------------------------------------------ beat 4: the pipeline, then the 4 GB card
 const pipe = S("svg", { width: 1920, height: 1080, viewBox: "0 0 1920 1080" }); stage.appendChild(pipe);
+pipe.style.transformOrigin = "960px 560px";
 const pg = S("g", {}, pipe);
 const NODES = [["Wake", "its name", "wave", 260], ["End of turn", "0.3 s pause", "pause", 560], ["Decide", "", "diamond", 860], ["Act", "the tool", "bolt", 1300], ["Speak", "sentence by sentence", "speaker", 1620]];
 const NY = 560;
@@ -381,9 +410,9 @@ const rtr = S("g", { transform: "translate(1080 434)" }, pg);
 S("rect", { x: -54, y: -22, width: 108, height: 44, rx: 22, fill: "#fff", stroke: BLUE, "stroke-width": 3.5 }, rtr);
 S("text", { y: 8, "text-anchor": "middle", "font-family": "Inter", "font-weight": 700, "font-size": 20, fill: BLUE }, rtr).textContent = "router";
 const nodes = NODES.map(([name, sub, ic, x]) => {
-  const g = S("g", { transform: `translate(${x} ${NY})` }, pg);
+  const g = S("g", {}, pg);
   const c = S("circle", { r: 50, fill: "#fff", stroke: LINE, "stroke-width": 4 }, g);
-  const i = icon(ic, g, INK, 6); i.setAttribute("transform", "translate(-30 -30) scale(.6)");
+  icon(ic, g, INK, 6).setAttribute("transform", "translate(-30 -30) scale(.6)");
   S("text", { y: 92, "text-anchor": "middle", "font-family": "Inter", "font-weight": 700, "font-size": 26, fill: INK }, g).textContent = name;
   S("text", { y: 122, "text-anchor": "middle", "font-family": "Inter", "font-weight": 500, "font-size": 18, fill: SLATE }, g).textContent = sub;
   return { g, c, x };
@@ -392,14 +421,13 @@ const pulse = S("circle", { r: 11, fill: BLUE }, pg);
 const pulseGlow = S("circle", { r: 24, fill: BLUE, opacity: .18 }, pg);
 const count1 = H("div", "", stage, null, { left: "980px", top: "250px", width: "200px", textAlign: "center" });
 const c1n = H("div", "num", count1, "0.00 s", { fontSize: "64px" });
-const c1l = H("div", "small", count1, "a command it knows", { marginTop: "-2px" });
+H("div", "small", count1, "a command it knows", { marginTop: "-2px" });
 const count2 = H("div", "", stage, null, { left: "960px", top: "770px", width: "240px", textAlign: "center" });
 const c2n = H("div", "num", count2, "0.00 s", { fontSize: "64px" });
-const c2l = H("div", "small", count2, "choosing a tool");
+H("div", "small", count2, "choosing a tool");
 const pipeNote = H("div", "small", stage, "Times measured in a recorded take on the laptop: router 54–77 ms, d1 decision model 0.34–0.46 s.", { left: "0px", width: "1920px", textAlign: "center", top: "936px", fontSize: "18px" });
-kline({ id: "p13", align: "center", y: 120, size: 70, parts: [["A command it knows:", ""], ["under a tenth of a second.", "e"]], out: () => P("p14").t0 - 0.35 });
-kline({ id: "p14", align: "center", y: 120, size: 70, parts: [["Picking the right tool:", ""], ["under half.", "e"]], out: () => P("p15").t0 - 0.3 });
-// the GPU card
+kline({ id: "p11", align: "center", y: 120, size: 70, parts: [["A command it knows:", ""], ["under a tenth of a second.", "e"]], out: () => P("p12").t0 - 0.25 });
+kline({ id: "p12", align: "center", y: 120, size: 70, parts: [["Picking the right tool:", ""], ["under half.", "e"]], out: () => P("p13").t0 - 0.2 });
 const gpu = H("div", "card", stage, null, { left: "510px", top: "380px", width: "900px", height: "380px" });
 const fan = S("svg", { width: 240, height: 240, viewBox: "-120 -120 240 240", style: "position:absolute;left:46px;top:70px" }); gpu.appendChild(fan);
 S("circle", { r: 108, fill: "none", stroke: INK, "stroke-width": 5 }, fan);
@@ -408,15 +436,15 @@ for (let i = 0; i < 7; i++) S("path", { d: "M0 -14C20 -40 30 -70 10 -92", fill: 
 S("circle", { r: 18, fill: "#fff", stroke: INK, "stroke-width": 5 }, fan);
 const gpuR = H("div", "", gpu, null, { position: "absolute", left: "340px", top: "70px", width: "500px" });
 H("div", "small", gpuR, "LAPTOP GPU MEMORY", { letterSpacing: ".16em", fontSize: "15px", fontWeight: 600 });
-const gpuBig = H("div", "num", gpuR, "4 GB", { fontSize: "92px", marginTop: "2px" });
+H("div", "num", gpuR, "4 GB", { fontSize: "92px", marginTop: "2px" });
 const vram = H("div", "", gpuR, null, { position: "relative", marginTop: "22px", height: "54px", borderRadius: "14px", background: "#EEF2F7", overflow: "hidden", display: "flex" });
 const blkLLM = H("div", "", vram, "LLM", { height: "100%", background: BLUE, color: "#fff", font: "700 20px Inter", display: "grid", placeItems: "center", width: "0%" });
 const blkD1 = H("div", "", vram, "d1", { height: "100%", background: "#60A5FA", color: "#fff", font: "700 20px Inter", display: "grid", placeItems: "center", width: "0%", borderLeft: "3px solid #fff" });
-const gpuNote = H("div", "small", gpuR, "LLM and d1 together: about 3.6 GB · speech runs on the CPU", { marginTop: "14px", fontSize: "17px" });
-kline({ id: "p15", align: "center", y: 140, size: 96, parts: [["All on", ""], ["4 GB.", "e"]], out: 50.05 });
+H("div", "small", gpuR, "LLM and d1 together: about 3.6 GB · speech runs on the CPU", { marginTop: "14px", fontSize: "17px" });
+kline({ id: "p13", align: "center", y: 140, size: 96, parts: [["All on", ""], ["4 GB.", "e"]], out: () => P("p14").t0 - 0.3 });
 
 // ------------------------------------------------------------------ beat 5
-const promises = [["p16", "user", "No account."], ["p17", "cardi", "No subscription."], ["p18", "mic", "Nobody listening."]].map(([id, ic, text], i) => {
+const promises = [["p14", "user", "No account."], ["p15", "cardi", "No subscription."], ["p16", "mic", "Nobody listening."]].map(([id, ic, text], i) => {
   const c = H("div", "card", stage, null, { left: px(200 + i * 540), top: "330px", width: "440px", height: "380px" });
   const g = S("svg", { width: 150, height: 150, viewBox: "0 0 100 100", style: "position:absolute;left:145px;top:56px" }); c.appendChild(g);
   icon(ic, g, INK, 5);
@@ -424,241 +452,179 @@ const promises = [["p16", "user", "No account."], ["p17", "cardi", "No subscript
   H("div", "", c, text, { position: "absolute", left: 0, width: "440px", textAlign: "center", top: "250px", font: "800 44px Inter", letterSpacing: "-.03em" });
   return { id, c, slash };
 });
-kline({ id: "p19", align: "center", y: 118, size: 120, parts: [["Silky.", "e"]], out: 57.9 });
-kline({ id: "p19", align: "center", y: 262, size: 40, weight: 600, color: SLATE, parts: [["Private, because there's nowhere else for it to go.", ""]], out: 57.9 });
-// end card
+kline({ id: "p17", align: "center", y: 118, size: 120, parts: [["Silky.", "e"]], out: () => T.end - 0.25 });
+kline({ id: "p17", align: "center", y: 262, size: 40, weight: 600, color: SLATE, parts: [["Private, because there's nowhere else for it to go.", ""]], out: () => T.end - 0.25 });
 const endc = H("div", "endc", stage);
 H("div", "kl", endc, 'Silky<span style="color:#2563EB">.</span>', { fontSize: "170px" });
 H("div", "", endc, "A voice assistant that runs on your Windows laptop.", { font: "500 36px Inter", color: SLATE, letterSpacing: "-.01em" });
 H("div", "pill", endc, "github.com/chaoticrs/silky", { fontSize: "26px", padding: "12px 26px", marginTop: "18px" });
-H("div", "small", stage, "Illustrated. Timings measured on an RTX 3050 Laptop GPU (4 GB).", { left: 0, width: "1920px", textAlign: "center", top: "990px", fontSize: "17px" }).id = "endnote";
+const endnote = H("div", "small", stage, "Recordings are real, at real speed. Other scenes are illustrated. Timings measured on an RTX 3050 Laptop GPU (4 GB).", { left: 0, width: "1920px", textAlign: "center", top: "990px", fontSize: "17px" });
 
-// beat progress, bottom left
-const beatsEl = H("div", "", stage); beatsEl.id = "beats";
+const beatsEl = H("div", ""); beatsEl.id = "beats";
 const beatBars = [...Array(5)].map(() => H("i", "", beatsEl));
 const beatName = H("span", "", beatsEl, "");
 
 // ------------------------------------------------------------------ draw(t)
-function overlayState(t) {
-  // [status, chip text, chip waiting?, ring mode, timing, eye?]   ring mode: listen | work | done
+function overlayState(t) {      // [status, chip, waiting?, ring mode]   ring mode: listen | work | done | eye
   const a = (id, o) => P(id).t0 + o;
-  if (t < a("p7", -0.4)) {
-    if (t < a("p5", 0)) return ["Listening", "", false, "listen", ""];
-    if (t < a("p5", 1.2)) return ["Hearing you…", "", false, "listen", ""];
-    if (t < a("p5", 1.6)) return ["Opening", "open_app", true, "work", ""];
-    return ["Opened Calculator", "open_app ✓", false, "done", "stt .91 · decide .11 · reply .64"];
+  if (t < a("p7", 0)) {
+    if (t < a("p5", 0)) return ["Listening", "", false, "listen"];
+    if (t < a("p5", 1.0)) return ["Hearing you…", "", false, "listen"];
+    if (t < a("p5", 1.4)) return ["Opening", "open_app", true, "work"];
+    return ["Opened Calculator", "open_app ✓", false, "done"];
   }
-  if (t < a("p8", -0.3)) return t < a("p7", 1.9) ? ["Rewriting selection", "rewrite_selection", true, "work", ""] : ["Fixed the grammar", "rewrite_selection ✓", false, "done", ""];
-  if (t < a("p10", -0.3)) return t < a("p8", 1.0) ? ["Searching your files", "find_files", true, "work", ""] : ["3 files found", "find_files ✓", false, "done", ""];
-  if (t < a("p12", -0.3)) return t < a("p11", 1.8) ? ["Watching the screen", "watch_screen", true, "eye", ""] : ["Your download is done", "watch_screen ✓", false, "done", ""];
-  return t < a("p12", 0.6) ? ["Remembering", "remember", true, "work", ""] : ["Remembered", "remember ✓", false, "done", ""];
+  if (t < a("p10", -0.2)) return t < a("p9", 1.5) ? ["Watching the screen", "watch_screen", true, "eye"] : ["Your download is done", "watch_screen ✓", false, "done"];
+  return t < a("p10", 0.5) ? ["Remembering", "remember", true, "work"] : ["Remembered", "remember ✓", false, "done"];
 }
 
 function draw(t) {
-  const a = (id, o = 0) => P(id).t0 + o, e = (id, o = 0) => P(id).t1 + o;
+  const a = (id, o = 0) => P(id).t0 + o;
 
-  // ---- camera: zoom into the laptop screen for beat 2, back out at p6; the laptop returns in beat 5
-  const zIn = eio(p(t, 9.85, 0.8)), zOut = eio(p(t, a("p6", -0.15), 0.8));
+  // ---- camera: zoom into the laptop screen for beat 2, back out on p6; the laptop returns in beat 5
+  const zIn = eio(p(t, a("p4", -0.55), 0.6)), zOut = eio(p(t, a("p6", -0.1), 0.6));
   const z = zIn * (1 - zOut);
-  const s = lerp(1, 3.75, z), cy = lerp(540, LAP.cy, z);
-  cam.setAttribute("transform", `translate(960 540) scale(${s}) translate(-960 ${-cy})`);
-  const worldOn = Math.min(win(t, 0, a("p7", -0.35), 0.01, 0.4), 1) + win(t, a("p19", -0.15), 58.15, 0.5, 0.4);
-  show(world, clamp(worldOn));
-  // laptop draws on at the start
-  const lapDraw = eo(p(t, 0.05, 0.9));
-  lapScreen.setAttribute("stroke-dasharray", `${lapDraw} 1`); lapBase.setAttribute("stroke-dasharray", `${lapDraw} 1`);
-  sshow(lapNotch, lapDraw);
-  // beat 5: the laptop rises back in, smaller, below the line
-  if (t > 50) {
-    const r = eo(p(t, a("p19", -0.1), 0.7));
+  cam.setAttribute("transform", `translate(960 540) scale(${lerp(1, 3.75, z)}) translate(-960 ${-lerp(540, LAP.cy, z)})`);
+  if (t > a("p14", -0.5)) {
+    const r = eo(p(t, a("p17", -0.1), 0.5));
     cam.setAttribute("transform", `translate(0 ${lerp(80, 60, r)}) translate(960 600) scale(.82) translate(-960 -540)`);
   }
+  show(world, clamp(win(t, 0, a("p7", -0.15), 0.01, 0.3) + win(t, a("p17", -0.15), T.end, 0.4, 0.3)));
+  const lapDraw = eo(p(t, 0.05, 0.7));
+  lapScreen.setAttribute("stroke-dasharray", `${lapDraw} 1`); lapBase.setAttribute("stroke-dasharray", `${lapDraw} 1`);
+  sshow(lapNotch, lapDraw);
 
   // ---- beat 1: the voice leaves for the cloud, then comes home
-  const away = eio(p(t, a("p1", 0.9), 1.1)) * (1 - eio(p(t, a("p3", -0.35), 0.6)));
-  const speaking = t < 2.6 ? clamp((t - a("p1", 0)) * 4) : 0.4;
-  const [wx, wy] = away > 0 ? bez(away) : [960, 535];
-  const finalPos = away > 0 ? [lerp(960, wx, Math.min(1, away * 1.0)), lerp(535, wy, away)] : [960, 535];
-  const waveVis = win(t, a("p1", -0.25), 9.9, 0.3, 0.3);
-  sshow(wave, waveVis, `translate(${away > 0 ? lerp(960, 1520, away) : 960} ${away > 0 ? lerp(535, 236, away) : 535}) scale(${lerp(1, 0.55, away)})`);
+  const away = eio(p(t, a("p1", 0.7), 0.9)) * (1 - eio(p(t, a("p3", -0.3), 0.5)));
+  const speaking = t < a("p2", 1.2) ? clamp((t - a("p1", 0)) * 4) : 0.4;
+  sshow(wave, win(t, a("p1", -0.25), a("p4", -0.5), 0.25, 0.25), `translate(${lerp(960, 1520, away)} ${lerp(535, 236, away)}) scale(${lerp(1, 0.55, away)})`);
   waveBars.forEach((b, i) => {
     const h = 14 + (10 + 52 * Math.abs(Math.sin(t * 7.5 + i * 0.9) * Math.sin(t * 3.1 + i * 1.7))) * (0.3 + 0.7 * speaking);
     b.setAttribute("y", -h / 2); b.setAttribute("height", h);
   });
-  const cloudOn = win(t, a("p1", 0.5), a("p3", 0.4), 0.5, 0.5);
+  const cloudOn = win(t, a("p1", 0.4), a("p3", 0.35), 0.4, 0.4);
   sshow(cloud, cloudOn, `translate(1520 ${236 + (1 - cloudOn) * 14}) scale(${lerp(.9, 1, cloudOn)})`);
-  sshow(servers, win(t, a("p2", 0), a("p3", 0.3), 0.5, 0.5), `translate(1660 ${330 + (1 - win(t, a("p2", 0), a("p3", 0.3), 0.5, 0.5)) * 16})`);
-  const grow = eo(p(t, a("p1", 0.9), 0.9)) * (1 - eio(p(t, a("p3", -0.35), 0.5)));
+  const servOn = win(t, a("p2", 0), a("p3", 0.3), 0.4, 0.4);
+  sshow(servers, servOn, `translate(1660 ${330 + (1 - servOn) * 16})`);
+  const grow = eo(p(t, a("p1", 0.7), 0.7)) * (1 - eio(p(t, a("p3", -0.3), 0.4)));
   packets.forEach((c, i) => {
-    const u = ((i / packets.length) + t * 0.32) % 1;
+    const u = ((i / packets.length) + t * 0.4) % 1;
     sshow(c, u < grow ? 1 - Math.pow(u, 6) : 0);
     const [x, y] = bez(u); c.setAttribute("cx", x); c.setAttribute("cy", y);
   });
   const [lx, ly] = bez(0.55);
-  const lockOn = win(t, a("p2", -0.1), a("p3", -0.2), 0.35, 0.35);
+  const lockOn = win(t, a("p2", -0.1), a("p3", -0.15), 0.3, 0.3);
   sshow(lock, lockOn, `translate(${lx} ${ly - 46}) scale(${lerp(.7, 1, eo(lockOn))})`);
-  const open = back(p(t, a("p2", 0.55), 0.35));
+  const open = back(p(t, a("p2", 0.45), 0.3));
   shackle.setAttribute("transform", `translate(${10 * open} ${-10 * open}) rotate(${22 * open} 12 -6)`);
 
   // ---- beat 2: on the desktop
-  const deskOn = win(t, 10.45, a("p6", 0.05), 0.35, 0.3) + win(t, a("p7", -0.25), a("p13", -0.25), 0.4, 0.4);
-  show(desk, clamp(deskOn));
-  const wm = Math.min(eo(p(t, a("p4", -0.1), 0.6)), 1 - eio(p(t, a("p5", -0.35), 0.4)));
-  show(wordmark, wm, `scale(${lerp(1.06, 1, eo(p(t, a("p4", -0.1), 0.8))) * lerp(1, 0.94, eio(p(t, a("p5", -0.35), 0.4)))})`);
-  wordmark.style.letterSpacing = `${lerp(0.3, -0.045, eo(p(t, a("p4", -0.1), 0.9)))}em`;
-  const b1 = win(t, a("p5", -0.05), a("p6", -0.1), 0.35, 0.3);
-  show(bubble1, b1, `translateY(${(1 - eo(p(t, a("p5", -0.05), 0.35))) * 24}px) scale(${lerp(.94, 1, back(p(t, a("p5", -0.05), 0.4)))})`);
-  const cOn = win(t, a("p5", 2.0), a("p6", -0.05), 0.4, 0.3);
-  show(calc, cOn, `scale(${lerp(.9, 1, back(p(t, a("p5", 2.0), 0.45)))})`);
-  // models inside the laptop and the device boundary
+  show(desk, clamp(win(t, a("p4", 0.0), a("p6", 0.05), 0.3, 0.25) + win(t, a("p9", -0.3), a("p11", -0.2), 0.3, 0.3)));
+  const wm = Math.min(eo(p(t, a("p4", -0.1), 0.45)), 1 - eio(p(t, a("p5", -0.3), 0.3)));
+  show(wordmark, wm, `scale(${lerp(1.06, 1, eo(p(t, a("p4", -0.1), 0.6))) * lerp(1, 0.94, eio(p(t, a("p5", -0.3), 0.3)))})`);
+  wordmark.style.letterSpacing = `${lerp(0.3, -0.045, eo(p(t, a("p4", -0.1), 0.7)))}em`;
+  show(bubble1, win(t, a("p5", -0.05), a("p6", -0.05), 0.3, 0.25), `translateY(${(1 - eo(p(t, a("p5", -0.05), 0.3))) * 24}px) scale(${lerp(.94, 1, back(p(t, a("p5", -0.05), 0.35)))})`);
+  show(calc, win(t, a("p5", 1.7), a("p6", 0), 0.3, 0.25), `scale(${lerp(.9, 1, back(p(t, a("p5", 1.7), 0.4)))})`);
   models.forEach((g, i) => {
-    const m = win(t, a("p6", 0.55 + i * 0.15), a("p7", -0.4), 0.4, 0.3);
-    sshow(g, m, `translate(${840 + i * 120} ${535 + (1 - back(p(t, a("p6", 0.55 + i * 0.15), 0.45))) * 18})`);
+    const m = win(t, a("p6", 0.45 + i * 0.12), a("p7", -0.15), 0.3, 0.25);
+    sshow(g, m, `translate(${840 + i * 120} ${535 + (1 - back(p(t, a("p6", 0.45 + i * 0.12), 0.4))) * 18})`);
   });
-  const fenceDraw = eio(p(t, a("p6", 1.1), 0.7)), fenceOn = win(t, a("p6", 1.1), a("p7", -0.4), 0.1, 0.3);
-  sshow(fence, fenceOn); fence.setAttribute("stroke-dashoffset", 1000 * (1 - fenceDraw)); fence.setAttribute("stroke-dasharray", `14 12`);
-  fence.style.clipPath = `inset(0 ${100 - fenceDraw * 100}% 0 0)`;
-  show(fenceTag, Math.min(eo(p(t, a("p6", 1.6), 0.35)), fenceOn), `translateY(${(1 - eo(p(t, a("p6", 1.6), 0.35))) * 10}px)`);
-  // beat 5: a listening ring on the laptop
-  const lr = win(t, a("p19", 0.2), 58.15, 0.5, 0.35);
-  sshow(ringOnLap, lr, `translate(960 535) scale(${1 + 0.06 * Math.sin(t * 3)})`);
+  const fenceDraw = eio(p(t, a("p6", 0.9), 0.55)), fenceOn = win(t, a("p6", 0.9), a("p7", -0.15), 0.1, 0.25);
+  sshow(fence, fenceOn); fence.style.clipPath = `inset(0 ${100 - fenceDraw * 100}% 0 0)`;
+  show(fenceTag, Math.min(eo(p(t, a("p6", 1.3), 0.3)), fenceOn), `translateY(${(1 - eo(p(t, a("p6", 1.3), 0.3))) * 10}px)`);
+  sshow(ringOnLap, win(t, a("p17", 0.2), T.end, 0.4, 0.3), `translate(960 535) scale(${1 + 0.06 * Math.sin(t * 3)})`);
   ringLapDot.setAttribute("r", 20 + 3 * Math.sin(t * 3));
 
-  // ---- the overlay (beats 2 and 3)
-  const ovOn = win(t, 10.75, a("p6", -0.1), 0.4, 0.3) + win(t, a("p7", -0.1), a("p13", -0.45), 0.4, 0.35);
-  show(ov, clamp(ovOn), `translateY(${(1 - eo(clamp(ovOn))) * -14}px)`);
+  // ---- the overlay (illustrated scenes of beats 2 and 3)
+  const ovOn = clamp(win(t, a("p4", 0.35), a("p6", -0.1), 0.3, 0.25) + win(t, a("p9", -0.15), a("p11", -0.4), 0.3, 0.3));
+  show(ov, ovOn, `translateY(${(1 - eo(ovOn)) * -14}px)`);
   if (ovOn > 0) {
-    const [status, chip, waiting, mode, timing] = overlayState(t);
+    const [status, chip, waiting, mode] = overlayState(t);
     if (ovStatus.textContent !== status) ovStatus.textContent = status;
     ovChip.textContent = chip; ovChip.className = "chip" + (waiting ? " wait" : ""); ovChip.style.display = chip ? "" : "none";
-    ovTiming.textContent = timing; ovTiming.style.display = timing ? "" : "none";
     const breathe = 0.5 + 0.5 * Math.sin(t * 4);
     if (mode === "listen") { ovArc.setAttribute("stroke-dasharray", `${20 + 10 * breathe} 100`); ovArc.setAttribute("transform", `rotate(${-90 + t * 40})`); }
     if (mode === "work") { ovArc.setAttribute("stroke-dasharray", "28 100"); ovArc.setAttribute("transform", `rotate(${t * 420})`); }
-    if (mode === "done" || mode === "eye") { ovArc.setAttribute("stroke-dasharray", `${mode === "done" ? 100 : 0} 100`); }
+    if (mode === "done") ovArc.setAttribute("stroke-dasharray", "100 100");
+    if (mode === "eye") { ovArc.setAttribute("stroke-dasharray", "12 100"); ovArc.setAttribute("transform", `rotate(${t * 160})`); }
     ovDot.setAttribute("r", mode === "eye" ? 0 : 10 + (mode === "listen" ? 4 * breathe : 2));
     sshow(ovEye, mode === "eye" ? 1 : 0);
-    if (mode === "eye") ovArc.setAttribute("stroke-dasharray", `${12} 100`), ovArc.setAttribute("transform", `rotate(${t * 160})`);
   }
 
-  // ---- beat 3 vignettes: in from the right, out to the left
+  // ---- beat 3: the recorded takes, then two quick scenes
+  drawTake(t);
   const vign = (el, t0, t1) => {
-    const i = eo(p(t, t0, 0.5)), o = eio(p(t, t1 - 0.45, 0.45));
+    const i = eo(p(t, t0, 0.35)), o = eio(p(t, t1 - 0.3, 0.3));
     show(el, Math.min(i, 1 - o), `translateX(${(1 - i) * 90 - o * 90}px)`);
   };
-  vign(s7, a("p7", -0.12), a("p8", -0.15));
-  vign(s8, a("p8", -0.25), a("p10", -0.15));
-  vign(s9, a("p10", -0.3), a("p12", -0.1));
-  vign(s10, a("p12", -0.15), a("p13", -0.3));
-  // fix the selection
-  sel.style.width = px(lerp(0, 860, eio(p(t, a("p7", 0.15), 0.6))));
-  sel.style.opacity = 1 - eio(p(t, a("p7", 2.1), 0.5));
-  const sh = p(t, a("p7", 0.95), 0.6);
-  shimmer.style.display = sh > 0 && sh < 1 ? "" : "none"; shimmer.style.transform = `translateX(${sh * 760}px)`;
-  const fixed = eio(p(t, a("p7", 1.85), 0.3));
-  show(wrong, 1 - fixed, `translateY(${-8 * fixed}px)`); show(right, fixed, `translateY(${8 * (1 - fixed)}px)`);
-  right.style.color = fixed >= 1 && t < a("p7", 2.6) ? BLUE : INK;
-  // files by meaning
-  show(bubble2, eo(p(t, a("p8", -0.2), 0.35)), `translateY(${(1 - eo(p(t, a("p8", -0.2), 0.35))) * 14}px)`);
-  const sort = p(t, a("p8", 0.1), 1.0);
-  tiles.forEach((d, i) => {
-    const appear = back(p(t, a("p8", -0.25) + i * 0.05, 0.4));
-    const isMatch = MATCH.includes(i);
-    const k = eio(clamp((sort - (isMatch ? 0.35 : 0)) / 0.65));
-    const fade = isMatch ? 1 - eio(clamp((sort - 0.55) / 0.35)) : lerp(1, 0, k);
-    show(d, Math.min(clamp(appear), fade), `translateY(${(1 - clamp(appear)) * 30 + (isMatch ? 0 : k * 30)}px) scale(${isMatch ? lerp(1, 1.05, k) : lerp(1, .9, k)})`);
-    d.style.borderColor = isMatch && k > 0 ? BLUE : EDGE;
-  });
-  const fOn = eo(p(t, a("p8", 0.75), 0.4));
-  show(found, fOn, `translateY(${(1 - fOn) * 20}px)`);
-  rows.forEach(({ r, fill, rel }, i) => {
-    const ri = eo(p(t, a("p8", 0.85 + i * 0.12), 0.4));
-    r.style.opacity = ri; r.style.transform = `translateX(${(1 - ri) * 40}px)`;
-    fill.style.width = (rel * 100 * eo(p(t, a("p8", 1.0 + i * 0.12), 0.7))) + "%";
-    r.style.background = i === 0 && t > a("p9", 1.3) ? MIST : "";
-  });
-  const cu = eio(p(t, a("p9", 0.6), 0.7));
-  show(cursor, Math.min(eo(p(t, a("p9", 0.4), 0.3)), 1), `translate(${lerp(1760, 1380, cu)}px, ${lerp(900, 470, cu)}px) scale(${t > a("p9", 1.3) && t < a("p9", 1.42) ? 0.88 : 1})`);
-  const rp = p(t, a("p9", 1.3), 0.5);
-  show(ripple, rp > 0 && rp < 1 ? 1 - rp : 0, `translate(${1382 - 30}px, ${472 - 30}px) scale(${lerp(.3, 1.6, eo(rp))})`);
-  // watch the screen
-  const prog = clamp((t - a("p10", -0.1)) / (a("p11", 1.8) - a("p10", -0.1)));
-  const pr = prog < 1 ? Math.pow(prog, 1.15) : 1;
+  vign(s9, a("p9", -0.3), a("p10", -0.1));
+  vign(s10, a("p10", -0.15), a("p11", -0.3));
+  const prog = clamp((t - a("p9", -0.25)) / 1.75), pr = Math.pow(prog, 1.1);
   dlFill.style.width = (pr * 100).toFixed(2) + "%";
   dlPct.textContent = pr >= 1 ? "Download complete ✓" : `${Math.floor(pr * 100)}% · ${(pr * 2.4).toFixed(1)} of 2.4 GB`;
   dlPct.style.color = pr >= 1 ? BLUE : SLATE;
-  // memory
-  show(memChip, eo(p(t, a("p12", 0.6), 0.3)), `scale(${lerp(.8, 1, back(p(t, a("p12", 0.6), 0.35)))})`);
+  show(memChip, eo(p(t, a("p10", 0.5), 0.25)), `scale(${lerp(.8, 1, back(p(t, a("p10", 0.5), 0.3)))})`);
   dials.forEach(({ strip, digit }, i) => {
-    const stop = a("p12", 1.3 + i * 0.25), spin = Math.max(0, stop - t);
-    const target = (digit + 9) % 10;                  // strip row whose label is `digit`
-    const off = spin > 0 ? (target + spin * 14) % 10 : target;
-    strip.setAttribute("transform", `translate(0 ${-off * 150})`);
+    const spin = Math.max(0, a("p10", 0.9 + i * 0.2) - t), target = (digit + 9) % 10;
+    strip.setAttribute("transform", `translate(0 ${-(spin > 0 ? (target + spin * 16) % 10 : target) * 150})`);
   });
 
   // ---- beat 4
-  const pOn = win(t, a("p13", -0.15), a("p15", 0.6), 0.4, 0.6);
-  const toCard = eio(p(t, a("p15", 0), 0.6));
-  show(pipe, pOn, `translate(${0}px, ${toCard * 60}px) scale(${lerp(1, .55, toCard)})`);
-  pipe.style.transformOrigin = "960px 560px";
+  const pOn = win(t, a("p11", -0.15), a("p13", 0.5), 0.3, 0.5);
+  const toCard = eio(p(t, a("p13", 0), 0.5));
+  show(pipe, pOn, `translate(0px, ${toCard * 60}px) scale(${lerp(1, .55, toCard)})`);
   nodes.forEach((n, i) => {
-    const k = back(p(t, a("p13", -0.1) + i * 0.09, 0.45));
+    const k = back(p(t, a("p11", -0.1) + i * 0.07, 0.35));
     n.g.setAttribute("transform", `translate(${n.x} ${NY + (1 - clamp(k)) * 30})`); n.g.setAttribute("opacity", clamp(k * 1.4));
   });
-  links.forEach((l, i) => l.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p13", -0.1) + i * 0.1, 0.4))));
-  fastPath.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p13", 0.1), 0.5)));
-  slowPath.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p13", 0.2), 0.5)));
-  sshow(d1, eo(p(t, a("p13", 0.5), 0.3))); sshow(rtr, eo(p(t, a("p13", 0.45), 0.3)));
-  // a pulse runs the route; route 1 = fast arc, route 2 = through d1
+  links.forEach((l, i) => l.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p11", 0) + i * 0.08, 0.35))));
+  fastPath.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p11", 0.1), 0.4)));
+  slowPath.setAttribute("stroke-dashoffset", 1 - eo(p(t, a("p11", 0.2), 0.4)));
+  sshow(d1, eo(p(t, a("p11", 0.4), 0.25))); sshow(rtr, eo(p(t, a("p11", 0.35), 0.25)));
   const route = (t0, dur, fast) => {
-    const u = p(t, t0, dur);
-    const pts = [[260, NY], [860, NY]], arc = fast ? fastPath : slowPath, L = arc.getTotalLength();
+    const u = p(t, t0, dur), arc = fast ? fastPath : slowPath, L = arc.getTotalLength();
     if (u <= 0 || u >= 1) return null;
-    if (u < 0.45) { const k = eio(u / 0.45); return [lerp(260, 860, k), NY, 0]; }
-    if (u < 0.85) { const k = eio((u - 0.45) / 0.4); const q = arc.getPointAtLength(k * L); return [q.x, q.y, k]; }
-    const k = eio((u - 0.85) / 0.15); return [lerp(1300, 1620, k), NY, 1];
+    if (u < 0.45) return [lerp(260, 860, eio(u / 0.45)), NY, 0];
+    if (u < 0.85) { const k = eio((u - 0.45) / 0.4), q = arc.getPointAtLength(k * L); return [q.x, q.y, k]; }
+    return [lerp(1300, 1620, eio((u - 0.85) / 0.15)), NY, 1];
   };
-  const r1 = route(a("p13", 0.25), 2.0, true), r2 = route(a("p14", -0.4), 2.0, false);
-  const r = r1 || r2;
+  const r1 = route(a("p11", 0.2), 1.7, true), r2 = route(a("p12", -0.35), 1.7, false), r = r1 || r2;
   sshow(pulse, r ? 1 : 0); sshow(pulseGlow, r ? 1 : 0);
-  if (r) { pulse.setAttribute("cx", r[0]); pulse.setAttribute("cy", r[1]); pulseGlow.setAttribute("cx", r[0]); pulseGlow.setAttribute("cy", r[1]); }
-  fastHi.setAttribute("stroke-dasharray", `${r1 && r1[2] != null && r1[0] > 860 ? Math.min(1, r1[2]) : (t > a("p13", 2.25) ? 1 : 0)} 1`);
-  slowHi.setAttribute("stroke-dasharray", `${r2 && r2[0] > 860 ? Math.min(1, r2[2]) : (t > a("p14", 1.6) ? 1 : 0)} 1`);
+  if (r) for (const c of [pulse, pulseGlow]) { c.setAttribute("cx", r[0]); c.setAttribute("cy", r[1]); }
+  fastHi.setAttribute("stroke-dasharray", `${r1 && r1[0] > 860 ? Math.min(1, r1[2]) : (t > a("p11", 1.9) ? 1 : 0)} 1`);
+  slowHi.setAttribute("stroke-dasharray", `${r2 && r2[0] > 860 ? Math.min(1, r2[2]) : (t > a("p12", 1.35) ? 1 : 0)} 1`);
   nodes.forEach((n) => {
-    const lit = (r1 && Math.abs(r1[0] - n.x) < 60 && Math.abs(r1[1] - NY) < 5) || (r2 && Math.abs(r2[0] - n.x) < 60 && Math.abs(r2[1] - NY) < 5);
+    const lit = [r1, r2].some((q) => q && Math.abs(q[0] - n.x) < 60 && Math.abs(q[1] - NY) < 5);
     n.c.setAttribute("stroke", lit ? BLUE : LINE);
   });
-  const k1 = eo(p(t, a("p13", 1.6), 1.1)), k2 = eo(p(t, a("p14", 0.4), 1.2));
-  show(count1, Math.min(eo(p(t, a("p13", 1.45), 0.3)), pOn, 1 - eio(p(t, a("p15", -0.1), 0.35))), `translateY(${(1 - eo(p(t, a("p13", 1.45), 0.3))) * 12}px)`);
-  c1n.textContent = (0.077 * k1).toFixed(k1 >= 1 ? 2 : 3).slice(0, 4) + " s";
-  if (k1 >= 1) c1n.textContent = "0.08 s";
-  show(count2, Math.min(eo(p(t, a("p14", 0.25), 0.3)), pOn, 1 - eio(p(t, a("p15", -0.1), 0.35))), `translateY(${(1 - eo(p(t, a("p14", 0.25), 0.3))) * 12}px)`);
+  const k1 = eo(p(t, a("p11", 1.3), 1.0)), k2 = eo(p(t, a("p12", 0.3), 1.1)), gone = 1 - eio(p(t, a("p13", -0.1), 0.3));
+  show(count1, Math.min(eo(p(t, a("p11", 1.15), 0.25)), pOn, gone), `translateY(${(1 - eo(p(t, a("p11", 1.15), 0.25))) * 12}px)`);
+  c1n.textContent = k1 >= 1 ? "0.08 s" : (0.077 * k1).toFixed(3).slice(0, 4) + " s";
+  show(count2, Math.min(eo(p(t, a("p12", 0.15), 0.25)), pOn, gone), `translateY(${(1 - eo(p(t, a("p12", 0.15), 0.25))) * 12}px)`);
   c2n.textContent = (0.46 * k2).toFixed(2) + " s";
-  show(pipeNote, Math.min(eo(p(t, a("p13", 2.8), 0.5)), 1 - eio(p(t, a("p15", -0.2), 0.4))));
-  // the GPU card
-  const gOn = win(t, a("p15", 0.25), 50.1, 0.5, 0.4);
-  show(gpu, gOn, `translateY(${(1 - eo(p(t, a("p15", 0.25), 0.5))) * 30}px) scale(${lerp(.96, 1, eo(p(t, a("p15", 0.25), 0.5)))})`);
+  show(pipeNote, Math.min(eo(p(t, a("p11", 2.3), 0.4)), gone));
+  const gOn = win(t, a("p13", 0.2), a("p14", -0.25), 0.4, 0.3);
+  show(gpu, gOn, `translateY(${(1 - eo(p(t, a("p13", 0.2), 0.4))) * 30}px) scale(${lerp(.96, 1, eo(p(t, a("p13", 0.2), 0.4)))})`);
   blades.setAttribute("transform", `rotate(${t * 240})`);
-  blkLLM.style.width = (47.5 * eo(p(t, a("p15", 0.8), 0.6))) + "%";
-  blkD1.style.width = (42.5 * eo(p(t, a("p15", 1.15), 0.6))) + "%";
-  blkD1.style.borderLeftWidth = blkD1.style.width === "0%" ? "0" : "3px";
+  blkLLM.style.width = (47.5 * eo(p(t, a("p13", 0.6), 0.5))) + "%";
+  blkD1.style.width = (42.5 * eo(p(t, a("p13", 0.9), 0.5))) + "%";
+  blkD1.style.borderLeftWidth = t < a("p13", 0.9) ? "0" : "3px";
 
   // ---- beat 5
-  promises.forEach(({ id, c, slash }, i) => {
-    const d = back(p(t, a(id, -0.05), 0.5)), out = eio(p(t, a("p19", -0.3), 0.5));
+  promises.forEach(({ id, c, slash }) => {
+    const d = back(p(t, a(id, -0.05), 0.4)), out = eio(p(t, a("p17", -0.3), 0.4));
     show(c, Math.min(clamp(d * 1.5), 1 - out), `translateY(${(1 - d) * -60 - out * 50}px)`);
-    slash.setAttribute("stroke-dashoffset", 1 - eo(p(t, a(id, 0.3), 0.35)));
+    slash.setAttribute("stroke-dashoffset", 1 - eo(p(t, a(id, 0.25), 0.3)));
   });
-  const end = eo(p(t, 58.15, 0.6));
+  const end = eo(p(t, T.end, 0.5));
   show(endc, end, `scale(${lerp(.97, 1, end)})`);
-  show(document.getElementById("endnote"), end);
+  show(endnote, end);
 
-  // ---- beat bar
-  const BEATS = [[0, "The problem"], [10, "Meet Silky"], [20, "What it does"], [38, "Fast and local"], [50, "Private"]];
-  let bi = 0; BEATS.forEach(([s], i) => { if (t >= s) bi = i; });
+  // ---- beat bar (hidden over the recordings, which fill the frame)
+  let bi = 0; T.beats.forEach((b, i) => { if (t >= b.t0) bi = i; });
   beatBars.forEach((b, i) => (b.style.background = i < bi ? "#93C5FD" : i === bi ? BLUE : EDGE));
-  if (beatName.textContent !== BEATS[bi][1]) beatName.textContent = BEATS[bi][1];
-  show(beatsEl, Math.min(eo(p(t, 0.6, 0.6)), 1 - eio(p(t, 57.9, 0.4))));
+  if (beatName.textContent !== T.beats[bi].label) beatName.textContent = T.beats[bi].label;
+  const overTake = win(t, a("p7", 0.1), P("F2").t1 + 0.15, 0.3, 0.3);
+  show(beatsEl, Math.min(eo(p(t, 0.5, 0.5)), 1 - eio(p(t, T.end - 0.25, 0.35)), 1 - overTake));
 
   drawLines(t);
 }
@@ -666,16 +632,19 @@ function draw(t) {
 // ------------------------------------------------------------------ entry points
 function init(timeline) {
   T = timeline;
-  T.byId = Object.fromEntries(T.phrases.map((x) => [x.id, x]));
+  T.byId = Object.fromEntries(T.items.map((x) => [x.id, x]));
   timeLines();
+  buildLog();
   draw(0);
 }
+// resolves once the frame of the recording on screen has been decoded (render.mjs waits on it)
+const settled = () => (take.style.display === "none" || !takeImg.src ? Promise.resolve() : takeImg.decode().catch(() => {}));
 function fit() {
   const k = Math.min(innerWidth / 1920, innerHeight / 1080);
   stage.style.transform = `scale(${k})`;
   stage.style.marginRight = px(1920 * k - 1920); stage.style.marginBottom = px(1080 * k - 1080);
 }
-window.film = { init, draw, ready: () => document.fonts.ready.then(() => document.fonts.check("800 40px Inter")) };
+window.film = { init, draw, settled, ready: () => document.fonts.ready.then(() => document.fonts.check("800 40px Inter")) };
 
 // preview: ?play plays the film with its sound; ?t=12.5 shows one frame
 const q = new URLSearchParams(location.search);
@@ -685,7 +654,7 @@ if (q.has("play") || q.has("t")) {
     await document.fonts.ready; init(tl);
     if (q.has("t")) return draw(Number(q.get("t")));
     const audio = new Audio("out/explainer.wav");
-    const go = H("div", "", document.body, "Click to play (60 s, with sound)"); go.id = "start";
+    const go = H("div", "", document.body, "Click to play (with sound)"); go.id = "start";
     go.onclick = () => { go.remove(); audio.play(); (function loop() { draw(audio.currentTime); if (!audio.ended) requestAnimationFrame(loop); })(); };
   });
 }

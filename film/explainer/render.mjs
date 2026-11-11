@@ -6,28 +6,30 @@
 //   node render.mjs 20 38              render only this stretch (seconds) to out/part.mp4
 //
 // explainer.html draws any instant as a pure function of time, so a frame is: draw(t), screenshot.
-// Uses the puppeteer-core installed for the launch film (../node_modules) and headless Edge.
+// Uses the puppeteer-core installed for the launch film (../node_modules) and headless Edge. The recorded takes
+// are the launch film's cut (../out/frames/), so run ../cut.py first if that folder is missing.
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url)), FPS = 30;
+const HERE = dirname(fileURLToPath(import.meta.url)), ROOT = dirname(HERE), FPS = 30;
 const EDGE = ["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
               "C:/Program Files/Google/Chrome/Application/chrome.exe"].find(existsSync);
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".wav": "audio/wav", ".png": "image/png", ".mp4": "video/mp4" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".wav": "audio/wav", ".png": "image/png", ".jpg": "image/jpeg", ".mp4": "video/mp4" };
 
+// film/ over http: the page in explainer/ and the recorded takes' frames in out/frames/ share one origin
 const server = createServer((req, res) => {
-  const path = normalize(join(HERE, decodeURIComponent(new URL(req.url, "http://x").pathname)));
-  if (!path.startsWith(HERE) || !existsSync(path) || statSync(path).isDirectory()) return res.writeHead(404).end();
+  const path = normalize(join(ROOT, decodeURIComponent(new URL(req.url, "http://x").pathname)));
+  if (!path.startsWith(ROOT) || !existsSync(path) || statSync(path).isDirectory()) return res.writeHead(404).end();
   res.writeHead(200, { "Content-Type": TYPES[extname(path)] || "application/octet-stream" });
   createReadStream(path).pipe(res);
 }).listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const base = `http://127.0.0.1:${server.address().port}`;
 if (process.argv.includes("--serve")) {
-  console.log(`${base}/explainer.html?play    (or ?t=12.5 for one frame; Ctrl+C to stop)`);
+  console.log(`${base}/explainer/explainer.html?play    (or ?t=12.5 for one frame; Ctrl+C to stop)`);
   await new Promise(() => {});
 }
 
@@ -39,12 +41,13 @@ const page = await browser.newPage();
 await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
 page.on("console", (m) => m.type() === "error" && console.log("  page:", m.text().slice(0, 200)));
 page.on("pageerror", (e) => console.log("  page error:", String(e).slice(0, 300)));
-await page.goto(`${base}/explainer.html`, { waitUntil: "networkidle0" });
+await page.goto(`${base}/explainer/explainer.html`, { waitUntil: "networkidle0" });
 if (!(await page.evaluate(() => film.ready()))) console.log("  warning: Inter did not load; the system font stands in");
 await page.evaluate((tl) => film.init(tl), timeline);
 const cdp = await page.createCDPSession();
 const shot = async (t, format = "jpeg") => {
   await page.evaluate((t) => film.draw(t), t);
+  await page.evaluate(() => film.settled());          // the recording's frame for this instant is decoded
   const { data } = await cdp.send("Page.captureScreenshot", format === "png" ? { format } : { format, quality: 94, optimizeForSpeed: true });
   return Buffer.from(data, "base64");
 };

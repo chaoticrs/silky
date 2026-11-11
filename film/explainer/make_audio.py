@@ -1,7 +1,9 @@
-"""The explainer's soundtrack, all made on this PC: narration from the kit's TTS, UI sound effects and a quiet pad.
+"""The explainer's soundtrack, all made on this PC: narration from the kit's TTS, the recorded takes' own sound,
+UI sound effects and a quiet pad.
 
-Writes out/explainer.wav (48 kHz stereo) and out/timeline.json: when each phrase starts and ends, an estimate of
-when each word is spoken (for the kinetic type), and when each effect lands. explainer.html and render.mjs
+Writes out/explainer.wav (48 kHz stereo) and out/timeline.json: when each phrase and recording starts and ends,
+an estimate of when each word is spoken (for the kinetic type), what the daemon reported in each recording, and
+when each effect lands. explainer.html and render.mjs
 follow the timeline.        run:  ..\\..\\.venv\\Scripts\\python.exe make_audio.py      (needs the kit running)
 """
 import hashlib
@@ -17,10 +19,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent))
 sys.path.insert(0, str(HERE))
 from agentd.kit import Kit, KitVoice  # noqa: E402
-from beats import GAP, LENGTH, PHRASES, SFX  # noqa: E402
+from beats import BEATS, END_CARD, SEQ, SFX  # noqa: E402
 
 SR = 48000
 OUT = HERE / "out"
+FOOTAGE = HERE.parent / "out"   # the launch film's recorded take, cut by ../cut.py
 CLIPS = OUT / "clips"
 VOICE = "juno"
 rng = np.random.default_rng(11)
@@ -96,36 +99,49 @@ def word_times(pcm: np.ndarray, text: str) -> list:
     return [{"w": w, "t0": round(pos(edges[i]), 3), "t1": round(pos(edges[i + 1]), 3)} for i, w in enumerate(words)]
 
 
-def narration():
+def sequence():
+    """Lay out SEQ back to back: phrases from the kit's TTS, footage with its own recorded sound.
+    -> (voice track, footage track, items, length)"""
     CLIPS.mkdir(parents=True, exist_ok=True)
     voice = KitVoice(Kit("http://127.0.0.1:8080"), "tts", VOICE)
-    phrases, clips, free = [], [], 0.0
-    for pid, at, text in PHRASES:
-        key = CLIPS / (hashlib.sha1(f"{VOICE}|{text}".encode()).hexdigest()[:12] + ".npy")
-        if not key.exists():
-            pcm, sr = voice.synth(text)
-            pcm = resample(pcm, sr)
-            loud = np.flatnonzero(np.abs(pcm) > 0.01)
-            np.save(key, pcm[max(0, loud[0] - 960):loud[-1] + 2400])  # trim, keep 20 ms before and 50 ms after
-        pcm = np.load(key)
-        start = max(at, free)
-        if start > at + 0.01:
-            print(f"  {pid} moved {start - at:+.2f} s: the phrase before it is still speaking")
-        end = start + len(pcm) / SR
-        words = [{**w, "t0": round(start + w["t0"], 3), "t1": round(start + w["t1"], 3)} for w in word_times(pcm, text)]
-        phrases.append({"id": pid, "text": text, "t0": round(start, 3), "t1": round(end, 3), "words": words})
-        clips.append((start, pcm))
-        free = end + GAP
-        print(f"  {pid:4s} {start:6.2f} - {end:6.2f}  {text}")
-    if free - GAP > LENGTH - 1.5:
-        raise SystemExit(f"the voiceover runs to {free - GAP:.1f} s; tighten PHRASES so it ends before {LENGTH - 1.5:.1f} s")
-    track = np.zeros((int(LENGTH * SR), 2), np.float32)
-    for start, pcm in clips:
+    cut = json.loads((FOOTAGE / "cut.json").read_text(encoding="utf-8"))
+    items, clips, t = [], [], 0.0
+    for iid, gap, what in SEQ:
+        start = max(0.0, t + gap)
+        if isinstance(what, str):
+            key = CLIPS / (hashlib.sha1(f"{VOICE}|{what}".encode()).hexdigest()[:12] + ".npy")
+            if not key.exists():
+                pcm, sr = voice.synth(what)
+                pcm = resample(pcm, sr)
+                loud = np.flatnonzero(np.abs(pcm) > 0.01)
+                np.save(key, pcm[max(0, loud[0] - 960):loud[-1] + 2400])  # trim, keep 20 ms before and 50 ms after
+            pcm = np.load(key)
+            words = [{**w, "t0": round(start + w["t0"], 3), "t1": round(start + w["t1"], 3)} for w in word_times(pcm, what)]
+            items.append({"id": iid, "kind": "phrase", "text": what, "t0": round(start, 3), "t1": round(start + len(pcm) / SR, 3), "words": words})
+            clips.append(("voice", start, pcm))
+        else:
+            shot = cut[what["shot"]]
+            a, b = what["from"], min(what["to"], shot["seconds"])
+            pcm = np.load(FOOTAGE / f"cut_{what['shot']}.npy")[int(a * SR):int(b * SR)].copy()
+            fade = int(0.04 * SR)
+            pcm[:fade] *= np.linspace(0, 1, fade); pcm[-fade:] *= np.linspace(1, 0, fade)
+            # the daemon's own notes and the cuts already in the shot, in this item's time
+            notes = [{**n, "t": round(start + n["t"] - a, 3)} for n in shot["notes"] if a <= n["t"] <= b]
+            cuts = [{"t": round(start + p["t"] - a, 3), "skipped": p["skipped"]} for p in shot["parts"] if p["skipped"] and a < p["t"] < b]
+            items.append({"id": iid, "kind": "footage", "shot": what["shot"], "title": what["title"], "command": shot["command"],
+                          "from": a, "t0": round(start, 3), "t1": round(start + b - a, 3), "frames": shot["frames"],
+                          "notes": notes, "cuts": cuts})
+            clips.append(("footage", start, pcm))
+        t = items[-1]["t1"]
+        print(f"  {iid:4s} {items[-1]['t0']:6.2f} - {items[-1]['t1']:6.2f}  {what if isinstance(what, str) else what['shot'] + ' (recorded take)'}")
+    length = round(t + 0.35 + END_CARD, 2)
+    voice_tr, foot_tr = (np.zeros((int(length * SR), 2), np.float32) for _ in range(2))
+    for kind, start, pcm in clips:
         pcm = onepole(pcm, 80, high=True)
         loud = pcm[np.abs(pcm) > 0.004]
-        pcm = np.tanh(pcm / (np.sqrt(np.mean(loud ** 2)) + 1e-9) * 0.16 * 2.2) / 2.2   # level every phrase, tame peaks
-        place(track, pcm, start)
-    return track, phrases
+        pcm = np.tanh(pcm / (np.sqrt(np.mean(loud ** 2)) + 1e-9) * 0.16 * 2.2) / 2.2   # level every clip, tame peaks
+        place(voice_tr if kind == "voice" else foot_tr, pcm, start, 1.0 if kind == "voice" else 0.9)
+    return voice_tr, foot_tr, items, length
 
 
 # ---------------------------------------------------------------- effects: short, crisp, quiet
@@ -191,11 +207,12 @@ SOUNDS = {
 }
 
 
-def effects(phrases):
-    starts = {p["id"]: p["t0"] for p in phrases}
-    fx, events = np.zeros((int(LENGTH * SR), 2), np.float32), []
+def effects(items, length):
+    starts = {p["id"]: p["t0"] for p in items}
+    starts["end"] = items[-1]["t1"] + 0.35
+    fx, events = np.zeros((int(length * SR), 2), np.float32), []
     for anchor, offset, kind in SFX:
-        at = (starts[anchor] if isinstance(anchor, str) else anchor) + offset
+        at = starts[anchor] + offset
         pan = {"swoosh": -0.3, "rswoosh": 0.3}.get(kind, rng.uniform(-0.25, 0.25))
         place(fx, SOUNDS[kind](), at, pan=pan)
         events.append({"t": round(at, 3), "kind": kind})
@@ -215,10 +232,10 @@ def tone(freq, seconds, harmonics, rolloff, detune=0.0):
     return out
 
 
-def music():
-    n, bar = int(LENGTH * SR), 60 / 96 * 4
+def music(length, beats, footage):
+    n, bar = int(length * SR), 60 / 104 * 4
     pad, pulse = np.zeros((n, 2), np.float32), np.zeros((n, 2), np.float32)
-    for b in range(int(LENGTH / bar) + 1):
+    for b in range(int(length / bar) + 1):
         chord, at = CHORDS[b % 4], b * bar
         t = t_(bar + 1.5)
         swell = (np.minimum(1, t / 1.2) * np.minimum(1, (bar + 1.5 - t) / 1.5)).astype(np.float32)
@@ -237,24 +254,32 @@ def music():
     size = n + len(ir)
     wet = np.stack([np.fft.irfft(np.fft.rfft(mix[:, c], size) * np.fft.rfft(ir * (1 if c else -1), size), size)[:n] for c in (0, 1)], 1)
     mix += (wet / np.abs(wet).max() * 0.12).astype(np.float32)
-    # quiet in the problem beat, fuller from "Meet Silky", resolves at the end
-    level = np.interp(t, [0, 9.8, 10.6, 50, 57, LENGTH], [0.45, 0.45, 1.0, 1.0, 1.1, 0.0])
+    # quiet in the problem beat, fuller from "Meet Silky", low under the recordings, resolves at the end
+    meet = beats[1]["t0"]
+    level = np.interp(t, [0, meet - 0.2, meet + 0.6, length - 3, length - 1.2, length], [0.45, 0.45, 1.0, 1.1, 1.0, 0.0])
+    for f in footage:
+        level *= 1 - 0.55 * np.clip(np.minimum((t - f["t0"] + 0.4) / 0.4, (f["t1"] + 0.3 - t) / 0.4), 0, 1)
     fade = np.minimum(1, t / 1.0)
     return mix * (level * fade)[:, None].astype(np.float32)
 
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    print("narration (synthesized once, then cached in out/clips)")
-    voice, phrases = narration()
-    fx, events = effects(phrases)
-    bed = music()
-    level = np.sqrt(smooth(np.mean(voice ** 2, axis=1), 0.2))
+    print("narration (synthesized once, then cached in out/clips) and footage")
+    voice, foot, items, length = sequence()
+    byid = {i["id"]: i for i in items}
+    beats = [{"label": label, "t0": round(byid[first]["t0"] - lead, 3)} for label, first, lead in BEATS]
+    footage = [i for i in items if i["kind"] == "footage"]
+    fx, events = effects(items, length)
+    bed = music(length, beats, footage)
+    speech = voice + foot
+    level = np.sqrt(smooth(np.mean(speech ** 2, axis=1), 0.2))
     duck = smooth(1 - 0.6 * np.clip(level / 0.04, 0, 1), 0.3)
     db = lambda d: 10 ** (d / 20)
-    final = voice * 1.25 + bed * duck[:, None] * db(-6) + fx * db(-7)
+    final = voice * 1.25 + foot * 1.15 + bed * duck[:, None] * db(-6) + fx * db(-7)
     final = np.tanh(final * 1.1) / np.tanh(1.1)
     final *= 0.89 / np.abs(final).max()
     write_wav(OUT / "explainer.wav", final)
-    (OUT / "timeline.json").write_text(json.dumps({"fps": 30, "length": LENGTH, "phrases": phrases, "sfx": events}, indent=1))
-    print(f"out/explainer.wav and out/timeline.json: {LENGTH:.0f} s")
+    (OUT / "timeline.json").write_text(json.dumps({"fps": 30, "length": length, "end": round(items[-1]["t1"] + 0.35, 3),
+                                                   "beats": beats, "items": items, "sfx": events}, indent=1))
+    print(f"out/explainer.wav and out/timeline.json: {length:.1f} s")
