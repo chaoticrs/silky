@@ -1,0 +1,306 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>agentd</title>
+<style>
+  :root { --bg: #050506; --ink: #f3e9e9; --dim: #9a7f80; --hue: 356; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: var(--bg); overflow: hidden; user-select: none; cursor: default;
+    font: 500 12px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--ink); }
+  body { background: radial-gradient(90% 75% at 50% 44%, hsl(var(--hue) 70% 7%) 0%, var(--bg) 72%);
+    border: 1px solid hsl(var(--hue) 70% 50% / .22); border-radius: 8px; transition: border-color .6s; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #skin { position: absolute; inset: 0; display: none; border-radius: 8px; overflow: hidden; }
+  #status { position: absolute; top: 12px; left: 14px; display: flex; align-items: center; gap: 7px;
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+  #dot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--hue) 90% 65%);
+    box-shadow: 0 0 10px hsl(var(--hue) 90% 60%); transition: background .6s, box-shadow .6s; }
+  /* what each step of the turn cost, as it happens */
+  #timing { position: absolute; top: 13px; right: 14px; font: 9px/1.2 "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .04em; color: hsl(var(--hue) 25% 60% / .7); white-space: nowrap; }
+  #timing b { font-weight: 400; color: hsl(var(--hue) 60% 80% / .95); }
+  /* tools: a chip per call, newest on top; it pulses while the tool runs, then shows how it went */
+  #trail { position: absolute; top: 30px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .chip { display: flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 99px; font-size: 10px;
+    letter-spacing: .04em; color: hsl(0 0% 96%); background: hsl(var(--hue) 90% 55% / .16);
+    border: 1px solid hsl(var(--hue) 90% 62% / .4); animation: in .25s ease-out; transition: opacity .5s, background .3s, border-color .3s; }
+  .chip i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: pulse .7s infinite alternate; }
+  .chip small { font: 9px "Cascadia Mono", Consolas, monospace; opacity: .7; }
+  .chip.ok { background: hsl(150 60% 45% / .16); border-color: hsl(150 70% 55% / .5); }
+  .chip.fail { background: hsl(40 90% 50% / .18); border-color: hsl(40 95% 60% / .6); }
+  .chip.ok i, .chip.fail i { animation: none; }
+  .chip.out { opacity: 0; }
+  @keyframes in { from { opacity: 0; transform: translateX(12px); } }
+  @keyframes pulse { to { opacity: .25; } }
+  #caption { position: absolute; left: 16px; right: 16px; bottom: 12px; text-align: center; min-height: 32px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    text-shadow: 0 1px 8px var(--bg); transition: opacity .3s, color .3s; }
+  #caption.user { color: var(--dim); font-style: italic; }
+  #card.open ~ #caption, #caption:has(~ #card.open) { opacity: 0; }
+  /* found files: rows you can click to open */
+  #card { position: absolute; left: 0; right: 0; bottom: 0; max-height: 64%; padding: 8px 10px 10px; overflow: hidden;
+    background: hsl(var(--hue) 30% 5% / .93); border-top: 1px solid hsl(var(--hue) 80% 55% / .45);
+    transform: translateY(102%); transition: transform .35s cubic-bezier(.2, .9, .3, 1); }
+  #card.open { transform: none; }
+  #card h1 { font-size: 9px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); margin: 0 4px 5px; }
+  .row { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+  .row:hover { background: hsl(var(--hue) 90% 55% / .18); }
+  .row.opened { background: hsl(150 60% 45% / .22); }
+  .row span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .row small { color: var(--dim); font-size: 10px; white-space: nowrap; }
+</style>
+<canvas id="c"></canvas>
+<div id="skin"></div>
+<div id="status"><span id="dot"></span><span id="label">idle</span></div>
+<div id="timing"></div>
+<div id="trail"></div>
+<div id="caption"></div>
+<div id="card"><h1></h1><div id="rows"></div></div>
+<script>
+"use strict";
+// ---- contract with Python: ui.on({type, ...}) with the events listed in contracts.py (Ui.emit).
+// The one call the other way: window.pywebview.api.open(path), when a row of a card is clicked ----
+const HUES = { idle: 356, listening: 346, thinking: 8, speaking: 0 };          // all red; activity shows the state
+const PERSONA_HUES = { chimera: { idle: 20, listening: 14, thinking: 32, speaking: 26 } };  // ember; others use HUES
+const $ = id => document.getElementById(id);
+const cv = $("c"), g = cv.getContext("2d");
+let W = 0, H = 0, persona = "", state = "idle", hue = 356, level = 0, bands = [0, 0, 0, 0, 0, 0], visible = true, flash = 0;
+let boot = 0, spin = 0;                // boot: 0 -> 1 as the network assembles after the card appears
+
+const ui = {
+  on(e) {
+    if (e.type === "state") { if (e.s === "listening" && state !== "listening") timing(); state = e.s; label();
+      if (e.s === "idle") caption("", false); }
+    else if (e.type === "persona") { persona = e.name; label(); loadSkin(e.skin); pickSkin(); }
+    else if (e.type === "level") { level = e.v; if (e.bands) bands = e.bands; }
+    else if (e.type === "heard") caption(e.text, true);
+    else if (e.type === "said") caption(e.text, false);
+    else if (e.type === "tool") { chip(e.name); flash = 1; }
+    else if (e.type === "done") settle(e.name, e.ok, e.ms);
+    else if (e.type === "timing") timing(e.step, e.ms);
+    else if (e.type === "card") card(e.title, e.rows || []);
+    else if (e.type === "visible") { visible = e.v; skin?.show(visible);
+      if (visible) { boot = 0; if (!skin) { last = performance.now(); requestAnimationFrame(frame); } }
+      else { card("", []); timing(); $("trail").textContent = ""; } }
+    skin?.on(e);
+  },
+  // ---- skins: a persona's own look. A skin script (its URL comes with the persona event) calls
+  // ui.skin(personaName, {mount(host), on(event), show(visible)}); while that persona is active the skin
+  // draws inside `host` instead of the network, gets every event above, and animates only while shown ----
+  skin(name, s) { skins[name] = s; s.mount($("skin")); pickSkin(); }
+};
+const skins = {}, requested = new Set();
+let skin = null;
+function loadSkin(url) {
+  if (!url || requested.has(url)) return;
+  requested.add(url);
+  document.head.appendChild(Object.assign(document.createElement("script"), { src: url }));
+}
+function pickSkin() {
+  const next = skins[persona] || null;
+  if (next === skin) return;
+  skin?.show(false);
+  skin = next;
+  $("skin").style.display = skin ? "block" : "none"; cv.style.display = skin ? "none" : "block";
+  if (skin) { document.documentElement.style.setProperty("--hue", 200); skin.on({ type: "state", s: state }); skin.show(visible); }
+  else if (visible) { last = performance.now(); requestAnimationFrame(frame); }
+}
+function label() { $("label").textContent = persona ? persona + " · " + state : state; }
+
+// ---- the heads-up parts: caption, timings, tool chips, cards ----
+let typing = 0;
+function caption(text, user) {         // what you said appears at once; what it says is typed out as it speaks
+  const c = $("caption"); c.className = user ? "user" : ""; clearInterval(typing);
+  if (user || !text) { c.textContent = text; return; }
+  let n = 0; c.textContent = "";
+  typing = setInterval(() => { c.textContent = text.slice(0, n += 2); if (n >= text.length) clearInterval(typing); }, 28);
+}
+const steps = [];
+function timing(step, ms) {            // no arguments = a new turn begins
+  if (!step) steps.length = 0; else steps.push(`${step} <b>${(ms / 1000).toFixed(2).replace(/^0/, "")}</b>`);
+  $("timing").innerHTML = steps.slice(-3).join(" · ");
+}
+function chip(name) {
+  const el = Object.assign(document.createElement("div"), { className: "chip" });
+  el.dataset.name = name; el.innerHTML = "<i></i>" + name.replace(/_/g, " ");
+  $("trail").prepend(el);
+  [...$("trail").children].slice(3).forEach(old => old.remove());
+}
+function settle(name, ok, ms) {
+  const el = [...$("trail").children].find(c => c.dataset.name === name && !c.dataset.done);
+  if (!el) return;
+  el.dataset.done = 1; el.classList.add(ok ? "ok" : "fail");
+  if (ms >= 100) el.insertAdjacentHTML("beforeend", `<small>${(ms / 1000).toFixed(1)}s</small>`);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 500); }, 5000);
+}
+function card(title, rows) {
+  $("card").classList.toggle("open", rows.length > 0);
+  if (!rows.length) return;
+  $("card").querySelector("h1").textContent = title; $("rows").textContent = "";
+  for (const r of rows) {
+    const el = Object.assign(document.createElement("div"), { className: "row", title: r.open });
+    el.append(Object.assign(document.createElement("span"), { textContent: r.label }),
+              Object.assign(document.createElement("small"), { textContent: r.sub }));
+    el.onclick = () => { el.classList.add("opened"); window.pywebview?.api.open(r.open); };
+    $("rows").append(el);
+  }
+}
+
+// ---- the network: a dense mesh. A ragged ring of hub nodes, each wired straight across to many others,
+// around a cloud of small nodes wired to their neighbours; the overlapping lines make the bright core ----
+let seed = 11;
+const rnd = () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const HUBS = 14, CLOUD = 36, HUB_LINKS = 11, nodes = [], edges = [], pulses = [], linked = new Set();
+const add = (x, y, hub) => nodes.push({ x, y, px: 0, py: 0, a: 0, rest: 0, out: [], zone: 0, hub,
+  size: hub ? 1.15 : .45 + rnd() * .6, ph: rnd() * 6.283, late: rnd() * .45 });
+for (let i = 0; i < HUBS; i++) {
+  const t = (i + rnd() * .7) / HUBS * 6.283, r = .7 + rnd() * .3;
+  add(Math.cos(t) * r, Math.sin(t) * r, true);
+}
+while (nodes.length < HUBS + CLOUD) {
+  const t = rnd() * 6.283, r = Math.pow(rnd(), .7) * .64, x = Math.cos(t) * r + .05, y = Math.sin(t) * r;
+  if (nodes.every(n => (n.x - x) ** 2 + (n.y - y) ** 2 > .011)) add(x, y, false);
+}
+const link = (i, j) => {
+  const key = i < j ? i * 100 + j : j * 100 + i;
+  if (i === j || linked.has(key)) return;
+  linked.add(key);
+  edges.push({ a: i, b: j, len: Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y), glow: 0 });
+  nodes[i].out.push(edges.length - 1); nodes[j].out.push(edges.length - 1);
+};
+nodes.forEach((n, i) => {
+  n.zone = Math.min(5, Math.floor((Math.atan2(n.y, n.x) + Math.PI) / (2 * Math.PI) * 6));
+  if (n.hub) { link(i, (i + 1) % HUBS); for (let k = 0; k < HUB_LINKS; k++) link(i, Math.floor(rnd() * nodes.length)); }
+  else nodes.map((m, j) => [(m.x - n.x) ** 2 + (m.y - n.y) ** 2, j]).sort((p, q) => p[0] - q[0]).slice(1, 3)
+    .forEach(([, j]) => link(i, j));
+});
+const zones = [0, 1, 2, 3, 4, 5].map(z => nodes.filter(n => n.zone === z));
+const pick = list => list[Math.floor(rnd() * list.length)];
+
+function fire(n, power) {              // a node lights up and sends pulses down some of its edges
+  if (!n || n.rest > 0) return;
+  n.a = Math.min(1.4, n.a + power); n.rest = .22;
+  if (power < .16 || pulses.length > 260) return;
+  const spread = Math.min(.62, 2.2 / n.out.length);   // a hub has many edges; send about two pulses either way
+  for (const ei of n.out) if (rnd() < spread) {
+    const e = edges[ei], from = nodes[e.a] === n ? 0 : 1;
+    pulses.push({ e, t: from, dir: from ? -1 : 1, p: power * .7 });
+  }
+}
+
+function drive(dt) {                   // what makes nodes fire depends on what the agent is doing
+  const chance = r => rnd() < r * dt;
+  if (boot < 1) { if (chance(30)) fire(pick(nodes), .6); }
+  else if (state === "thinking") { if (chance(9)) fire(pick(nodes), .75); }
+  else if (state === "listening") { if (chance(2 + level * 34)) fire(pick(zones[2].concat(zones[3])), .35 + level * .8); }
+  else if (state === "speaking") {     // each frequency band of the voice drives its own region
+    for (let b = 0; b < 6; b++) if (chance(bands[b] * 46)) fire(pick(zones[b]), .3 + bands[b] * .9);
+  } else if (chance(.9)) fire(pick(nodes), .4);
+  if (flash > .96) nodes.forEach(n => { n.rest = 0; fire(n, .5); });
+}
+
+// the ring round the network says what it is doing: a level meter while it listens, two arcs chasing each
+// other while it thinks, a spectrum of the voice while it speaks
+const ease = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+function halo(cx, cy, r, dt) {
+  spin += dt * (state === "thinking" ? 2.6 : .25);
+  if (boot < 1) {                      // the shockwave the network assembles behind
+    g.strokeStyle = `hsl(${hue} 95% 70% / ${(1 - boot) * .8})`; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(cx, cy, r * 1.25 * ease(boot), 0, 7); g.stroke();
+  } else if (state === "listening") {
+    g.strokeStyle = `hsl(${hue} 95% 62% / ${.14 + level * .6})`; g.lineWidth = 1 + level * 2.5;
+    g.beginPath(); g.arc(cx, cy, r * (1 + level * .07), 0, 7); g.stroke();
+  } else if (state === "thinking") {
+    g.lineWidth = 1.4;
+    for (const [dir, len, a] of [[1, 1.3, .7], [-1.6, .7, .45]]) {
+      g.strokeStyle = `hsl(${hue + 12} 95% 68% / ${a})`;
+      g.beginPath(); g.arc(cx, cy, r * (dir > 0 ? 1 : 1.07), spin * dir, spin * dir + len); g.stroke();
+    }
+  } else if (state === "speaking") {
+    g.strokeStyle = `hsl(${hue + 8} 95% 66% / .75)`; g.lineWidth = 1.6; g.beginPath();
+    for (let i = 0; i < 60; i++) {     // six bands, mirrored left and right, low notes at the bottom
+      const t = i / 60 * 6.283 + 1.571, f = Math.abs(i - 30) / 30 * 5, b = Math.floor(f);
+      const v = bands[b] + ((bands[Math.min(5, b + 1)] - bands[b]) * (f - b));
+      g.moveTo(cx + Math.cos(t) * r, cy + Math.sin(t) * r);
+      g.lineTo(cx + Math.cos(t) * r * (1.02 + v * .26), cy + Math.sin(t) * r * (1.02 + v * .26));
+    }
+    g.stroke();
+  }
+}
+
+let last = performance.now();
+function frame(now) {
+  if (!visible || skin) return;
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  boot = Math.min(1, boot + dt / .8);
+  hue += (((PERSONA_HUES[persona] || HUES)[state] ?? 215) - hue) * Math.min(1, dt * 5);
+  document.documentElement.style.setProperty("--hue", hue.toFixed(0));
+  drive(dt); flash *= Math.exp(-dt * 4);
+
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+  if (W !== pw || H !== ph) { cv.width = W = pw; cv.height = H = ph; }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.globalCompositeOperation = "lighter";
+  const s = Math.min(w * .40, h * .33) * (1 + level * .03), cx = w / 2, cy = h * .46, tt = now * .0005;
+  for (const n of nodes) {             // every node drifts a little on its own; at boot each flies out from the centre
+    const k = ease((boot - n.late) / .55);
+    n.k = k;
+    n.px = cx + (n.x + Math.sin(tt + n.ph) * .022) * s * 1.08 * k; n.py = cy + (n.y + Math.cos(tt * 1.3 + n.ph) * .022) * s * k;
+  }
+  halo(cx, cy, s * 1.16, dt);
+  g.lineWidth = .5; g.strokeStyle = `hsl(${hue} 92% 56% / ${.2 * ease(boot * 1.4 - .4)})`; g.beginPath();
+  const lit = [];
+  for (const e of edges) {             // resting edges go down as one path
+    e.glow *= Math.exp(-dt * 5);
+    if (e.glow > .03) { lit.push(e); continue; }
+    g.moveTo(nodes[e.a].px, nodes[e.a].py); g.lineTo(nodes[e.b].px, nodes[e.b].py);
+  }
+  g.stroke();
+  for (const e of lit) {
+    g.strokeStyle = `hsl(${hue + 6} 95% ${58 + e.glow * 22}% / ${.2 + e.glow * .6})`; g.lineWidth = .5 + e.glow * .9;
+    g.beginPath(); g.moveTo(nodes[e.a].px, nodes[e.a].py); g.lineTo(nodes[e.b].px, nodes[e.b].py); g.stroke();
+  }
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    const p = pulses[i], a = nodes[p.e.a], b = nodes[p.e.b];
+    p.t += p.dir * dt * 1.5 / p.e.len; p.e.glow = Math.max(p.e.glow, p.p);
+    if (p.t < 0 || p.t > 1) { fire(p.dir > 0 ? b : a, p.p); pulses.splice(i, 1); continue; }
+    g.fillStyle = `hsl(${hue + 10} 100% 86% / ${.5 + p.p * .5})`;
+    g.beginPath(); g.arc(a.px + (b.px - a.px) * p.t, a.py + (b.py - a.py) * p.t, 1.2, 0, 7); g.fill();
+  }
+  for (const n of nodes) {
+    n.a *= Math.exp(-dt * 3.2); n.rest -= dt;
+    const r = n.size * (1.4 + n.a * 1.8) * n.k, k = Math.min(1, n.a);
+    g.fillStyle = `hsl(${hue} 95% 55% / ${(.05 + k * .22) * n.k})`;
+    g.beginPath(); g.arc(n.px, n.py, r * 4, 0, 7); g.fill();           // halo
+    g.fillStyle = `hsl(${hue + k * 8} 95% ${56 + k * 38}% / ${(.75 + k * .25) * n.k})`;
+    g.beginPath(); g.arc(n.px, n.py, r, 0, 7); g.fill();               // core: red, white-hot when it fires
+  }
+  g.globalCompositeOperation = "source-over";
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- demo: open index.html?demo in a browser to see every state without the daemon ----
+if (location.search.includes("demo")) {
+  const at = (ms, e) => setTimeout(() => ui.on(e), ms);
+  const turn = () => {
+    ui.on({ type: "visible", v: true });
+    at(0, { type: "state", s: "listening" });
+    at(2400, { type: "state", s: "thinking" }); at(2400, { type: "timing", step: "stt", ms: 910 });
+    at(2500, { type: "heard", text: "find my notes about op-amps" });
+    at(2700, { type: "timing", step: "decide", ms: 112 }); at(2750, { type: "tool", name: "search_files_by_meaning" });
+    at(3300, { type: "done", name: "search_files_by_meaning", ok: true, ms: 31 });
+    at(3350, { type: "card", title: "3 files", rows: [{ label: "Op-amp lab notes.pdf", sub: "Documents", open: "" },
+      { label: "analog_filters.md", sub: "Notes", open: "" }, { label: "LM358 datasheet.pdf", sub: "Downloads", open: "" }] });
+    at(3500, { type: "timing", step: "reply", ms: 640 }); at(3500, { type: "state", s: "speaking" });
+    at(3550, { type: "said", text: "I found three files. The closest is your op-amp lab notes." });
+    at(8000, { type: "state", s: "idle" }); at(10500, { type: "visible", v: false });
+  };
+  let t = 0;
+  setInterval(() => { t += .05; const v = Math.abs(Math.sin(t * 7) * Math.sin(t * 2.3));
+    ui.on({ type: "level", v, bands: [0, 1, 2, 3, 4, 5].map(b => Math.max(0, Math.sin(t * (3 + b * 1.7) + b)) * v) }); }, 50);
+  turn(); setInterval(turn, 11500);
+}
+</script>

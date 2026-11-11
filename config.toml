@@ -1,0 +1,88 @@
+# Everything you would want to change without touching code. Restart the daemon after editing.
+
+[assistant]
+name = "Silky"
+prompt = """You are a voice assistant running locally on the user's Windows laptop. You have two voices: {name}, the default, and Chimera, a physically modelled synthetic voice. A message starting with [as Chimera] is answered as Chimera (your name is then Chimera); otherwise your name is {name}. Your replies are spoken aloud: answer in one or two short plain sentences, no markdown, no lists. When the user asks you to do something, call a tool instead of describing it, then confirm in a few words. If a tool fails, say so briefly. Files a tool finds are listed on screen for the user: say how many there are and name only the best match, never a path. For text the user has selected use copy_selection; to put text back into their document use paste_text. Use set_chimera_voice when asked to change how Chimera sounds."""
+
+[wake]
+# transcript = transcribe what is said and wake when it starts with the phrase: reliable for any word, but the
+#              CPU works whenever someone is talking nearby.
+# spotter    = tiny always-on keyword model: near-zero CPU, but it often misses unusual words like these.
+engine = "transcript"
+phrase = "silky"        # any English word or phrase; two-word phrases ("hey silky") trigger less by accident
+threshold = 0.2         # spotter only: 0..1, raise if it wakes by mistake, lower if it misses you
+boost = 2.0
+
+[kit]                   # the inference layer (llama-swap-kit); roles per its CONTRACT.md
+url = "http://127.0.0.1:8080"
+folder = "../LocalAI"          # where the kit lives: run.ps1 starts it from here when it is not running
+agent_role = "agent"          # the kit's agent model (LFM3 1.7B here)
+stt_role = "stt-command"      # custom kit role: whisper tuned for short English commands
+tts_role = "tts"
+voice = ""              # empty = the tts model's default voice
+max_tokens = 512
+temperature = 0.3
+# Extra fields sent with every chat request. LFM3 "thinks" for 40-80 hidden tokens before each answer unless
+# told not to: off, a tool call takes about 0.3 s instead of 0.8 s. Models without a thinking mode ignore it.
+request = { chat_template_kwargs = { enable_thinking = false } }
+
+[listen]
+min_rms = 0.008         # quietest sound treated as speech
+silence_s = 0.8         # pause that always ends a command
+smart_turn = true       # a small model judges shorter pauses: a command that sounds finished ends after quick_s
+quick_s = 0.3           # ...this long a pause, instead of waiting out silence_s (saves about half a second a turn)
+sure = 0.8              # how sure (0..1) the model must be; raise it if you get cut off mid-sentence
+max_s = 10.0            # longest single command (the stt-command role hears at most ~10 s)
+start_timeout_s = 5.0   # how long to wait for a command after the wake word
+follow_up_s = 4.0       # after a reply, keep listening this long without the wake word (0 = off)
+
+[tools]
+policy = "confirm"      # confirm = ask before risky tools | auto = never ask | readonly = risky tools removed
+disabled = []           # tool names to switch off, e.g. ["run_powershell"]
+
+[overlay]
+enabled = true
+width = 320
+height = 280
+margin = 0              # gap from the top-right screen corner, px
+linger_s = 4.0          # stays on screen this long after going idle
+card_s = 20.0           # ...or this long when it is showing a list of found files (click one to open it)
+
+[cues]                  # short tones: woke, heard you, has news, something failed (each persona has its own sound)
+enabled = true
+volume = 0.2            # 0..1
+
+[memory]                # "remember that ...", "what did I tell you about ...": kept in data/memory.json, on this PC only
+enabled = true
+
+[search]                # "find my notes about ...": files found by meaning, not by name (agentd/index.py)
+enabled = true
+folders = ["documents", "desktop", "downloads"]   # names under your home folder, or full paths
+max_files = 4000
+refresh_on_start = true # pick up new and changed files in the background each time the daemon starts
+                        # (the first build can take minutes: run  .\run.ps1 --index  once to watch it)
+
+[router]                # fast path: known commands are matched by embedding and skip the LLM (routes.toml)
+enabled = true
+embed_role = "embed"
+threshold = 0.86        # 0..1 similarity needed; raise if it grabs commands it shouldn't
+margin = 0.03           # lead required over the next-best different intent
+
+[chimera]               # second persona: a physically modelled voice (build it with setup-chimera.ps1)
+enabled = true
+phrase = "chimera"      # saying this instead of the wake phrase answers in the Chimera voice
+head = true             # show Chimera's own 3D head in the overlay instead of the node mesh (needs engines/chimera/head.js)
+
+[decide]                # a decision model (kit model d1): answers in one pass, no text generated, ~0.1 s
+enabled = true
+model = "d1"            # kit model id (reached at /upstream/<id>/v1/systemone)
+tools = true            # it picks the tool, the LLM then only fills in the arguments (more reliable than the LLM alone)
+sure = 0.8              # below this confidence the LLM decides by itself
+
+[sight]                 # the decision model looking at screenshots (needs [decide])
+enabled = true
+sure = 0.6              # how sure it must be to call something visible
+verify = true           # after opening an app or page, look at the screen to confirm it really appeared
+verify_s = 6            # ...for up to this many seconds
+watch_every_s = 4       # "tell me when ...": how often to look
+watch_timeout_min = 30  # ...and when to give up

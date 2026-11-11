@@ -1,0 +1,84 @@
+# Fast-path intents: commands answered without running the LLM (see agentd/router.py).
+# Each route is a tool call with fixed arguments and a few example phrasings. Add your own freely;
+# only commands that need no free-form argument belong here ("open <anything>" stays with the LLM).
+
+[[route]]
+tool = "get_time"
+reply = "It's {result}."
+say = ["what time is it", "what's the time", "tell me the time", "what day is it", "what's the date today", "what is today's date"]
+
+[[route]]
+tool = "system_status"
+reply = "{result}."
+say = ["how is my battery", "battery status", "how much battery is left", "how is my laptop doing", "system status", "how much ram is free"]
+
+[[route]]
+tool = "media_key"
+args = { action = "volume_up" }
+reply = "Louder."
+say = ["volume up", "turn it up", "make it louder", "increase the volume", "louder"]
+
+[[route]]
+tool = "media_key"
+args = { action = "volume_down" }
+reply = "Quieter."
+say = ["volume down", "turn it down", "make it quieter", "decrease the volume", "lower the volume"]
+
+[[route]]
+tool = "media_key"
+args = { action = "mute" }
+reply = "Muted."
+say = ["mute", "mute the sound", "silence the laptop", "unmute", "turn the sound off"]
+
+[[route]]
+tool = "media_key"
+args = { action = "play_pause" }
+reply = "Okay."
+say = ["pause", "pause the music", "play", "resume the music", "play pause", "stop the music", "pause the video"]
+
+[[route]]
+tool = "media_key"
+args = { action = "next" }
+reply = "Next."
+say = ["next song", "skip this song", "next track", "skip"]
+
+[[route]]
+tool = "media_key"
+args = { action = "previous" }
+reply = "Going back."
+say = ["previous song", "go back a song", "previous track", "play the last song again"]
+
+[[route]]
+tool = "lock_screen"
+reply = "Locked."
+say = ["lock the screen", "lock my laptop", "lock the computer"]
+
+[[route]]
+tool = "read_clipboard"
+reply = "{result}"
+say = ["read my clipboard", "what's on my clipboard", "read what I copied"]
+
+# Chimera voice presets (these tools exist only when the Chimera voice is built)
+[[route]]
+tool = "set_chimera_voice"
+args = { preset = "default" }
+reply = "Voice reset."
+say = ["reset your voice", "go back to your normal voice", "default voice", "reset the chimera voice"]
+
+[[route]]
+tool = "set_chimera_voice"
+args = { preset = "female" }
+reply = "Female voice."
+say = ["use a female voice", "sound like a woman", "switch to the female voice"]
+
+[[route]]
+tool = "set_chimera_voice"
+args = { preset = "male" }
+reply = "Male voice."
+say = ["use a male voice", "sound like a man", "switch to the male voice"]
+
+[[route]]
+tool = "set_chimera_voice"
+args = { preset = "child" }
+reply = "Child voice."
+say = ["use a child voice", "sound like a child", "sound like a kid"]

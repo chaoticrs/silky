@@ -1,0 +1,17 @@
+[project]
+name = "agentd"
+version = "0.1.0"
+description = "Local voice agent daemon: wake word -> speech -> tools -> speech, on top of llama-swap-kit"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "sounddevice",      # mic + speakers (PortAudio)
+    "sherpa-onnx",      # wake-word spotter
+    "sentencepiece",    # turns the wake phrase into the spotter's tokens
+    "pywebview",        # overlay window on the system WebView2
+    "onnxruntime",      # end-of-turn model (turn.py)
+    "pypdf",            # PDF text for search by meaning (index.py)
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,12 @@
+.venv/
+models/
+index/
+data/
+__pycache__/
+uv.lock
+engines/rust/
+engines/chimera-src/
+engines/chimera/
+engines/chimera-say/target/
+engines/*.log
+engines/chimera-head/node_modules/

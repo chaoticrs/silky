@@ -1,0 +1,9 @@
+{
+  "name": "chimera-head",
+  "private": true,
+  "description": "Build-time only: bundles Chimera's own 3D head renderer into one script for the agentd overlay",
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "three": "0.186.1"
+  }
+}
