@@ -12,20 +12,31 @@ import numpy as np
 from .contracts import Voice
 
 _END = re.compile(r"(?<=[.!?:;\n])\s+")
-_MARKUP = re.compile(r"</?think>?|[*_#`>|]+")  # markdown, and the stray tag a no-thinking model leaks
+# markdown, the stray tag a no-thinking model leaks, and emoji (a TTS voice reads them as a second of noise)
+_MARKUP = re.compile(r"</?think>?|[*_#`>|]+|[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]+")
 
 
 def sentences(deltas: Iterable[str], min_chars: int = 16) -> Iterator[str]:
-    """Regroup streamed text into speakable sentences, markdown stripped."""
+    """Regroup streamed text into speakable sentences, markdown stripped. A sentence shorter than
+    min_chars ("Sure!") is joined to the next one, never held back until the reply ends."""
     buf = ""
     for d in deltas:
         buf += d
         parts = _END.split(buf)
-        while len(parts) > 1 and len(parts[0]) >= min_chars:
-            yield _MARKUP.sub("", parts.pop(0)).strip()
+        while len(parts) > 1:
+            if len(parts[0]) >= min_chars:
+                yield _clean(parts.pop(0))
+            elif len(parts) > 2:
+                parts[:2] = [parts[0] + " " + parts[1]]
+            else:
+                break
         buf = " ".join(parts)
-    if _MARKUP.sub("", buf).strip():
-        yield _MARKUP.sub("", buf).strip()
+    if _clean(buf):
+        yield _clean(buf)
+
+
+def _clean(text: str) -> str:
+    return " ".join(_MARKUP.sub("", text).split())
 
 
 def _bands(block: np.ndarray, rate: int) -> list[float]:
@@ -78,6 +89,9 @@ class Speaker:
                 if gen != self._gen:
                     continue
                 if rate != out_rate:
+                    if out is not None:  # a voice with another sample rate: don't leave the old device stream open
+                        out, old = None, out
+                        old.close(ignore_errors=True)
                     out = sd.OutputStream(samplerate=rate, channels=1, dtype="float32", device=self._device)
                     out.start()
                     out_rate = rate

@@ -39,6 +39,15 @@ class Agent:
         sent after the conversation, so the cached prompt is untouched, and it is not remembered."""
         turn = [{"role": "user", "content": user_text}]
         self._remember(turn)
+        finished = False
+        try:
+            yield from self._steps(turn, hint)
+            finished = True
+        finally:  # a turn that broke off (model error, stopped) leaves no trace: an unanswered user message
+            if not finished and self._turns and self._turns[-1] is turn:  # would be answered again next turn
+                self._turns.pop()
+
+    def _steps(self, turn: list[dict], hint: str) -> Iterator[str]:
         for step in range(self._rounds):
             text, calls = "", []
             nudge = [{"role": "system", "content": hint}] if hint and step == 0 else []

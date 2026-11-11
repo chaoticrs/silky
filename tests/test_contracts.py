@@ -24,6 +24,17 @@ def test_sentences():
     out = list(sentences(["Hello the", "re, **world**. This is ", "the second one! tail"]))
     assert out == ["Hello there, world.", "This is the second one!", "tail"], out
 
+    fed = []  # a short first sentence ("Sure!") must not hold the whole reply back until the stream ends
+
+    def stream():
+        for d in ["Sure! ", "Why do atoms lie? ", "Because they make up everything. ", "Want another?"]:
+            fed.append(d)
+            yield d
+    first = next(sentences(stream()))
+    assert first == "Sure! Why do atoms lie?" and len(fed) == 2, (first, fed)
+    assert list(sentences(["That was fun. \U0001F604 ", "See you later! \U0001F389"])) == \
+        ["That was fun. See you later!"]                                    # emoji are not read out
+
 
 def test_toolbox():
     asked = []
@@ -59,6 +70,21 @@ def test_agent():
     for _ in range(3):
         list(agent.respond("again"))
     assert sum(m["role"] == "user" for m in llm.seen[-1]) == 2  # history is capped
+
+    class Flaky(FakeLlm):  # the model server fails in the middle of one turn
+        def stream(self, messages, tools):
+            if messages[-1].get("content") == "fail":
+                raise RuntimeError("kit restarting")
+            yield from super().stream(messages, tools)
+    llm = Flaky()
+    agent = Agent(llm, Toolbox("auto", lambda q: True), "sys")
+    try:
+        list(agent.respond("fail"))
+    except RuntimeError:
+        pass
+    list(agent.respond("go"))
+    users = [m["content"] for m in llm.seen[-1] if m["role"] == "user"]
+    assert users == ["go"], users  # the failed request is not left behind, to be answered again
 
 
 class FakeMic:
@@ -220,6 +246,86 @@ def test_sight_and_lookout():
     check = lookout.install(sight, Host(), verify_s=1, log=lambda m: None)
     assert "confirmed" in check("open_app", {"name": "notepad"}, "opened notepad")
     assert check("get_time", {}, "noon") == "noon"                           # only tools that change the screen
+
+
+def test_kit_errors():
+    """Whatever goes wrong talking to the kit (garbled reply, stream cut off) surfaces as KitError, the one
+    failure the app handles."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from agentd.kit import Kit, KitDecider, KitEmbedder, KitError, KitLlm, KitStt
+
+    class Garbled(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n\ndata: {broken' if "chat" in self.path else b"<html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    server = HTTPServer(("127.0.0.1", 0), Garbled)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    kit = Kit(f"http://127.0.0.1:{server.server_port}", timeout=5)
+    for call in (lambda: KitEmbedder(kit, "embed").embed(["x"]), lambda: KitStt(kit, "stt").transcribe(np.zeros(1600)),
+                 lambda: KitDecider(kit, "d1").decide({}), lambda: list(KitLlm(kit, "agent", 9, 0).stream([], []))):
+        try:
+            call()
+            raise AssertionError("no error")
+        except KitError:
+            pass
+    server.shutdown()
+
+
+def _daemon(mic, stt):
+    """A Daemon with only the conversation flow wired (no kit, no audio out)."""
+    from agentd.app import Daemon
+    from agentd.contracts import NoUi
+    d = Daemon.__new__(Daemon)
+    d._ui, d._cues, d._barge, d._persona, d._mic, d._stt = NoUi(), None, [], "", mic, stt
+    d._l = {"start_timeout_s": 1.0, "follow_up_s": 0, "silence_s": 0.5}
+    d._listener, d.personas, d._menu, d.features = Listener(silence_s=0.5), {"silky": None}, {"none": ""}, []
+    return d
+
+
+def test_daemon_survives_failures():
+    from agentd.kit import KitError
+    voice = (0.2 * np.sin(np.arange(16000) * 0.2)).astype(np.float32)
+    clip = np.concatenate([np.zeros(8000, np.float32), voice, np.zeros(16000, np.float32)])
+
+    class DeadStt:
+        def transcribe(self, pcm):
+            raise KitError("inference kit unreachable")
+    assert _daemon(FakeMic(clip), DeadStt())._hear(1.0) == ""              # a failed transcription is no request
+
+    class BrokenStt:
+        calls = 0
+
+        def transcribe(self, pcm):
+            BrokenStt.calls += 1
+            raise ValueError("something unexpected")
+    _daemon(FakeMic(np.concatenate([clip, clip])), BrokenStt()).run(None, by_transcript=True)  # returns at EOF
+    assert BrokenStt.calls == 2                                             # it kept listening after the failure
+
+
+def test_barge_in_keeps_the_request():
+    from agentd.app import _after_wake_word_in
+    assert _after_wake_word_in("make up everything. Silky, what time is it", ["silky"]) == "what time is it"
+    assert _after_wake_word_in("make up everything.", ["silky"]) is None
+    voice = (0.2 * np.sin(np.arange(16000) * 0.2)).astype(np.float32)
+    lead = [voice[i:i + FRAME] for i in range(0, 16000, FRAME)]
+
+    class Stt:
+        def __init__(self, text):
+            self.text = text
+
+        def transcribe(self, pcm):
+            return self.text
+    for heard, want in (("...everything. Silky, what time is it?", "what time is it?"), ("Silky, stop.", "")):
+        d = _daemon(FakeMic(np.zeros(32000, np.float32)), Stt(heard))
+        d._barge = list(lead)  # what _finish_speaking keeps when the wake word cuts the reply short
+        assert d._hear(1.0) == want and d._barge == [], (heard, want)
 
 
 if __name__ == "__main__":
