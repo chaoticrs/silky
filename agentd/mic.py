@@ -16,16 +16,24 @@ class DeviceMic:
         self._stream.start()
 
     def _on_audio(self, data, frames, time, status):
-        if self._q.full():
-            self._q.get_nowait()
-        self._q.put_nowait(data[:, 0].copy())
+        # must never raise: sounddevice aborts the stream on an exception here and the mic goes dead for good.
+        # (full() then get_nowait() can find the queue already emptied by a flush() on the other thread)
+        try:
+            if self._q.full():
+                self._q.get_nowait()
+            self._q.put_nowait(data[:, 0].copy())
+        except (queue.Empty, queue.Full):
+            pass
 
     def read(self):
         return self._q.get()
 
     def flush(self):
-        while not self._q.empty():
-            self._q.get_nowait()
+        try:
+            while True:
+                self._q.get_nowait()
+        except queue.Empty:
+            pass
 
 
 class FileMic:

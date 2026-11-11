@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 _ECHOED_TAG = re.compile(r"^\[as \w+\]\s*")  # small models sometimes repeat the persona tag
 YES = ("yes", "yeah", "yep", "sure", "do it", "go ahead", "confirm", "okay", "ok")
 LISTED = ("find_files", "search_files_by_meaning")  # tools whose result is a list of files worth showing
+STOP = ("stop", "quiet", "be quiet", "shut up", "cancel", "never mind", "nevermind", "enough", "that's enough")
 
 
 def log(msg: str) -> None:
@@ -42,6 +43,17 @@ def _after_wake_word(text: str, phrase: str) -> str | None:
     return " ".join(words[n:]) if difflib.SequenceMatcher(None, head, phrase.lower()).ratio() >= 0.7 else None
 
 
+def _after_wake_word_in(text: str, phrases: list[str]) -> str | None:
+    """Like _after_wake_word, but the wake phrase may come anywhere: '...make up everything. Silky, what time
+    is it' -> 'what time is it' (the first wake phrase found wins; None if there is none)."""
+    words = text.split()
+    for i in range(len(words)):
+        for phrase in phrases:
+            if (rest := _after_wake_word(" ".join(words[i:]), phrase)) is not None:
+                return rest
+    return None
+
+
 class Daemon:
     def __init__(self, cfg: dict, ui, mic=None, mute: bool = False):
         k, self._l, a = cfg["kit"], cfg["listen"], cfg["assistant"]
@@ -50,6 +62,7 @@ class Daemon:
             raise SystemExit(f"Inference kit is not answering at {k['url']}. Start it first (run.ps1 does that).")
         self._ui, self._mic, self._wake, self._tag, self._persona = ui, mic, None, "", ""
         self._busy, self._background = threading.RLock(), threading.local()  # one turn at a time; see announce
+        self._barge: list = []  # mic frames from a barge-in (wake word said over the reply), replayed by _hear
         self._decide, self.features = cfg["decide"], []
         paths = cfg.get("paths", {})  # optional [paths] data / index: other folders for what it stores (demos, tests)
         self._data, self._index_dir = ROOT / paths.get("data", "data"), ROOT / paths.get("index", "index")
@@ -226,11 +239,17 @@ class Daemon:
         self._wake = wake
         names = " / ".join(f'"{p}"' for p in self.personas)
         log(f"ready: say {names}  |  {len(self._menu) - 1} tools  |  " + ", ".join(self.features))
-        try:
-            while True:
+        while True:
+            try:
                 self._idle_transcript() if by_transcript else self._idle_spotter()
-        except EOFError:
-            pass
+            except EOFError:
+                return
+            except Exception as e:  # one failed turn (the kit restarting, a bad reply) must not end the assistant
+                log(f"  turn failed: {type(e).__name__}: {e}")
+                self._barge = []
+                self._cue("error")
+                self._ui.emit("state", s="idle")
+                time.sleep(1)  # if it keeps failing, don't spin
 
     def _idle_spotter(self) -> None:
         recent = deque(maxlen=15)  # 1.5 s: the wake word is recognised a moment after it is said
@@ -250,7 +269,10 @@ class Daemon:
         pcm = self._listener.capture(self._mic, 3600.0)
         if pcm is None or len(pcm) < (self._l["silence_s"] + 0.3) * MIC_RATE:  # a click, not speech
             return
-        text = self._stt.transcribe(pcm)
+        try:
+            text = self._stt.transcribe(pcm)
+        except KitError as e:  # not a turn yet: just keep listening
+            return log(f"  stt error: {e}")
         for phrase in self.personas:
             if (rest := _after_wake_word(text, phrase)) is not None:
                 log(f"wake: {phrase} (heard {text!r})")
@@ -265,11 +287,16 @@ class Daemon:
         text = text or self._hear(self._l["start_timeout_s"])
         while text:
             self.answer(text)
-            text = self._hear(self._l["follow_up_s"]) if self._l["follow_up_s"] else ""
+            if self._barge:  # cut short by the wake word: what was said after it is the next request
+                text = self._hear(self._l["start_timeout_s"])
+            else:
+                text = self._hear(self._l["follow_up_s"]) if self._l["follow_up_s"] else ""
         self._ui.emit("state", s="idle")
 
     def _hear(self, timeout_s: float, lead: list = ()) -> str:
         self._ui.emit("state", s="listening")
+        barged, self._barge = self._barge, []
+        lead = list(lead) or barged
         if not lead:
             self._mic.flush()
         pcm = self._listener.capture(self._mic, timeout_s, lambda v: self._ui.emit("level", v=v), lead)
@@ -278,8 +305,20 @@ class Daemon:
         self._ui.emit("state", s="thinking")
         self._cue("heard")
         t = time.time()
-        text = self._stt.transcribe(pcm)
+        try:
+            text = self._stt.transcribe(pcm)
+        except KitError as e:
+            log(f"  stt error: {e}")
+            self._cue("error")
+            return ""
         log(f"heard ({self._timed('stt', t):.2f}s stt): {text!r}")
+        if barged:  # the replay holds the end of the reply, the wake word that cut it off, and the new request
+            rest = _after_wake_word_in(text, list(self.personas))
+            if not rest:  # just the name (or no clear one): it has stopped talking and listens
+                return self._hear(self._l["start_timeout_s"])
+            if rest.lower().strip(" .!?,") in STOP:  # "Silky, stop": stopping was the whole request
+                return ""
+            text = rest
         self._ui.emit("heard", text=text)
         return text
 
@@ -364,13 +403,19 @@ class Daemon:
         done = threading.Event()
         threading.Thread(target=lambda: (self._speaker.wait(), done.set()), daemon=True).start()
         self._mic.flush()
+        recent, barged = deque(maxlen=15), False  # 1.5 s: the wake word is recognised a moment after it is said
         while not done.is_set():
             try:
-                if self._wake.heard(self._mic.read()):
+                frame = self._mic.read()
+                recent.append(frame)
+                if self._wake.heard(frame) and not barged:
                     log("  interrupted")
                     self._speaker.stop()
+                    barged = True
             except EOFError:
                 done.wait()
+        if barged:  # keep the wake word and what followed, for _hear to replay: "Silky, stop. What time is it?"
+            self._barge = list(recent)
 
     # -- Host slot: background features (reminders, screen watches) speak through this ---------------------
     def announce(self, event: str, then: str = "") -> None:

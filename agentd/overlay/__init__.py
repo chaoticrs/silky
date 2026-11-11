@@ -14,6 +14,7 @@ import ctypes
 import json
 import threading
 import time
+from collections import deque
 from ctypes import wintypes
 from pathlib import Path
 from typing import Callable
@@ -42,6 +43,8 @@ class Overlay:
         self._linger, self._ready, self._hide_timer, self._shown = linger_s, threading.Event(), None, False
         self._persona = None  # remembered while hidden, replayed when the window appears
         self._margin = margin
+        self._queue, self._wake, self._gen = deque(), threading.Condition(), 0  # see emit / _sender
+        threading.Thread(target=self._sender, daemon=True).start()
         self._win = webview.create_window(
             "agentd", PAGE.as_uri(), width=width, height=height, x=0, y=0,  # _place() moves it to the corner
             frameless=True, easy_drag=True, on_top=True, hidden=True, focus=False, resizable=False,
@@ -75,8 +78,38 @@ class Overlay:
         webview.start(lambda: threading.Thread(target=work, daemon=True).start())
 
     def emit(self, event: str, **data) -> None:
+        """Fire-and-forget (the Ui contract): queued for the sender thread, so the caller never waits on the
+        page. The speaker's play loop sends a level 30 times a second between audio blocks; a level not yet
+        sent is replaced by the newer one, never queued behind it."""
+        with self._wake:
+            if event == "level" and self._queue and self._queue[-1][0] == "level":
+                self._queue[-1] = (event, data)
+            else:
+                self._queue.append((event, data))
+            self._wake.notify()
+
+    def _sender(self) -> None:
+        """The only thread that touches the page and shows or hides the window: events arrive in order,
+        and a hide can't land in the middle of showing for a new turn."""
+        while True:
+            with self._wake:
+                while not self._queue:
+                    self._wake.wait()
+                event, data = self._queue.popleft()
+            try:
+                self._deliver(event, data)
+            except Exception:
+                pass  # window closing
+
+    def _deliver(self, event: str, data: dict) -> None:
         if not self._ready.wait(10):  # only the first events ever wait, while the page loads
             return
+        if event == "_hide":
+            if data["gen"] == self._gen:  # no state event came in since the timer was set
+                self._hide()
+            return
+        if event == "heard":
+            self._hold = 0.0  # a new request: the page closes the old card, so it no longer holds the window
         if event == "persona":
             if data["name"] in self._skins:
                 data["skin"] = self._skins[data["name"]]
@@ -104,6 +137,7 @@ class Overlay:
         self._ready.set()
 
     def _on_state(self, s: str) -> None:
+        self._gen += 1
         if self._hide_timer:
             self._hide_timer.cancel()
         if s == "idle":
@@ -118,7 +152,7 @@ class Overlay:
                 self._js({"type": "persona", **self._persona})
 
     def _hide_in(self, seconds: float) -> None:
-        self._hide_timer = threading.Timer(seconds, self._hide)
+        self._hide_timer = threading.Timer(seconds, lambda gen=self._gen: self.emit("_hide", gen=gen))
         self._hide_timer.daemon = True
         self._hide_timer.start()
 

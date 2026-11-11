@@ -128,8 +128,8 @@ class FileIndex:
                 flush()
                 on_progress(done, len(todo))
         flush()
-        self._files, self._rows = seen, rows
-        self._vectors = np.concatenate(vectors) if vectors else np.zeros((0, 1), np.float32)
+        matrix = np.concatenate(vectors) if vectors else np.zeros((0, 1), np.float32)
+        self._files, self._rows, self._vectors = seen, rows, matrix  # rows and vectors swap in together
         if todo or stale:
             self._store.mkdir(parents=True, exist_ok=True)
             np.save(self._store / "vectors.npy", self._vectors)
@@ -141,6 +141,8 @@ class FileIndex:
         if not self._rows:
             return []
         rows, vectors = self._rows, self._vectors  # refresh() may swap these in from another thread
+        if len(rows) != len(vectors):  # caught mid-swap: take the new pair
+            rows, vectors = self._rows, self._vectors
         sims = vectors @ self._embedder.embed([QUERY + query])[0]
         hits, used = [], set()
         for i in np.argsort(-sims):
