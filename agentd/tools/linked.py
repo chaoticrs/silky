@@ -1,6 +1,7 @@
-"""Tools that are one function in front of a brick the app built: the file index and the Chimera voice.
+"""Tools that are one function in front of a brick the app built: the file index, the Chimera voice, the LLM.
 Each install(...) takes the brick (by its methods, nothing is imported from it) and registers the tool.
 """
+from . import clipboard
 from .files import listing
 from .registry import tool
 
@@ -11,6 +12,24 @@ def install_search(index) -> None:
           "than naming it, e.g. 'my notes on op-amps', 'the internship offer letter'.")
     def search_files_by_meaning(about: str) -> str:
         return listing([path for _, path, _ in index.search(about)]) or "the file index is empty"
+
+
+def install_rewrite(llm) -> None:
+    """llm: the Llm slot. Rewriting is one tool on purpose: a small model asked to chain copy -> rewrite ->
+    paste by itself skipped steps or pasted the text back unchanged; a single focused request does not."""
+    @tool("Rewrite the text the user has selected, in place: 'fix the grammar of this', 'make this formal', "
+          "'shorten this', 'translate this to Hindi'. instruction: what to do to the text.")
+    def rewrite_selection(instruction: str) -> str:
+        text = clipboard.copy_selection()
+        if text in ("nothing is selected", "error: clipboard busy"):
+            return text
+        new = "".join(part for kind, part in llm.stream(
+            [{"role": "system", "content": "You rewrite text. Reply with the rewritten text only: no quotes, no comments."},
+             {"role": "user", "content": instruction + "\n\nText:\n" + text}], None) if kind == "text").strip()
+        if not new:
+            return "error: the rewrite came back empty"
+        clipboard.paste_text(new)
+        return f"done, it is already pasted in place of the selection, which now reads: {new}"
 
 
 def install_voice(voice) -> None:

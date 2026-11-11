@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Demo desktop</title>
+<!--
+  The desktop the assistant is filmed on (record.py opens it full screen). A wallpaper and two small
+  windows drawn in the page, so nothing private is ever in shot: a note with clumsy grammar to fix, and a
+  download to wait for. The assistant itself is not staged: it hears a spoken command, reads this page's
+  selection through the real clipboard, pastes into it with real keystrokes, and watches it with real screenshots.
+  record.py tells the page what to show by answering its polls of /next.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; font: 400 20px/1.5 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: #eef; cursor: default; }
+  body { background: radial-gradient(70% 90% at 12% 18%, #6b2bd9 0%, transparent 60%), radial-gradient(60% 80% at 88% 92%, #0aa6c9 0%, transparent 62%),
+    radial-gradient(50% 60% at 60% 30%, #e0347a 0%, transparent 60%), #0b1026; }
+  .win { position: absolute; border-radius: 14px; background: #12141ff2; border: 1px solid #ffffff26; box-shadow: 0 30px 90px #0009;
+    opacity: 0; transform: translateY(24px) scale(.98); transition: opacity .35s, transform .35s; }
+  .win.open { opacity: 1; transform: none; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-size: 15px; color: #ffffffa0; border-bottom: 1px solid #ffffff14; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; } .bar i + i { background: #febc2e; } .bar i + i + i { background: #28c840; }
+  .bar span { margin-left: 10px; }
+  #notes { left: 150px; top: 190px; width: 980px; }
+  #note { padding: 34px 38px 44px; font-size: 38px; line-height: 1.45; outline: none; min-height: 250px; caret-color: #fff; }
+  #note::selection { background: #3b82f6aa; }
+  #download { left: 240px; top: 330px; width: 800px; padding-bottom: 34px; }
+  #download h1 { margin: 34px 38px 6px; font-size: 34px; font-weight: 600; }
+  #download p { margin: 0 38px; font-size: 24px; color: #ffffffa8; }
+  .track { height: 16px; margin: 26px 38px 0; border-radius: 9px; background: #ffffff1a; overflow: hidden; }
+  .track b { display: block; height: 100%; width: 0; border-radius: 9px; background: linear-gradient(90deg, #38bdf8, #818cf8); transition: width 1s linear; }
+  #download.done .track b { background: #22c55e; }
+  #download.done h1 { color: #4ade80; }
+  #mark { position: absolute; left: 34px; bottom: 26px; font: 15px "Cascadia Mono", Consolas, monospace; letter-spacing: .12em; color: #ffffff66; }
+</style>
+<div class="win" id="notes"><div class="bar"><i></i><i></i><i></i><span>Notes</span></div>
+  <div id="note" contenteditable="true" spellcheck="false"></div></div>
+<div class="win" id="download"><div class="bar"><i></i><i></i><i></i><span>Downloads</span></div>
+  <h1 id="dl-title">Downloading ubuntu-24.04.iso</h1><p id="dl-sub">4.1 GB of 6.2 GB</p><div class="track"><b id="dl-bar"></b></div></div>
+<div id="mark">DEMO DESKTOP &middot; SCREEN RECORDING</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const DRAFT = "she dont like when people is late to there meetings";
+const DO = {
+  clear() { $("notes").classList.remove("open"); $("download").classList.remove("open"); document.title = "Demo desktop"; },
+  notes() { DO.clear(); $("note").textContent = DRAFT; $("notes").classList.add("open"); document.title = "Notes"; },
+  select() { $("note").focus(); getSelection().selectAllChildren($("note")); },
+  download() { DO.clear(); $("download").className = "win open"; $("dl-title").textContent = "Downloading ubuntu-24.04.iso";
+    $("dl-sub").textContent = "4.1 GB of 6.2 GB"; $("dl-bar").style.width = "66%"; document.title = "Downloads: downloading ubuntu-24.04.iso, 66%"; },
+  finish() { $("dl-bar").style.width = "100%"; setTimeout(() => { $("download").classList.add("done"); $("dl-title").textContent = "Download complete";
+    $("dl-sub").textContent = "ubuntu-24.04.iso, 6.2 GB"; document.title = "Downloads: download complete"; }, 1000); },
+};
+let seen = 0;
+setInterval(async () => {
+  try { for (const c of await (await fetch("/next?since=" + seen)).json()) { seen = c.n; DO[c.do]?.(); } } catch { /* recorder gone */ }
+}, 120);
+window.text = () => $("note").textContent;     // record.py reads the note back to check the paste really happened
+</script>

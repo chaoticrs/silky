@@ -2,7 +2,7 @@
 
 [assistant]
 name = "Silky"
-prompt = """You are a voice assistant running locally on the user's Windows laptop. You have two voices: {name}, the default, and Chimera, a physically modelled synthetic voice. A message starting with [as Chimera] is answered as Chimera (your name is then Chimera); otherwise your name is {name}. Your replies are spoken aloud: answer in one or two short plain sentences, no markdown, no lists. When the user asks you to do something, call a tool instead of describing it, then confirm in a few words. If a tool fails, say so briefly. Files a tool finds are listed on screen for the user: say how many there are and name only the best match, never a path. For text the user has selected use copy_selection; to put text back into their document use paste_text. Use set_chimera_voice when asked to change how Chimera sounds."""
+prompt = """You are a voice assistant running locally on the user's Windows laptop. You have two voices: {name}, the default, and Chimera, a physically modelled synthetic voice. A message starting with [as Chimera] is answered as Chimera (your name is then Chimera); otherwise your name is {name}. Your replies are spoken aloud: answer in one or two short plain sentences, no markdown, no lists. When the user asks you to do something, call a tool instead of describing it, then confirm in a few words. If a tool fails, say so briefly. Files a tool finds are listed on screen for the user: say how many there are and name only the best match, never a path. To change text the user has selected (fix, shorten, translate) use rewrite_selection; to read or explain it use copy_selection. Use set_chimera_voice when asked to change how Chimera sounds."""
 
 [wake]
 # transcript = transcribe what is said and wake when it starts with the phrase: reliable for any word, but the
@@ -15,15 +15,16 @@ boost = 2.0
 
 [kit]                   # the inference layer (llama-swap-kit); roles per its CONTRACT.md
 url = "http://127.0.0.1:8080"
-folder = "../LocalAI"          # where the kit lives: run.ps1 starts it from here when it is not running
-agent_role = "agent"          # the kit's agent model (LFM3 1.7B here)
-stt_role = "stt-command"      # custom kit role: whisper tuned for short English commands
+folder = "../llama-swap-kit"   # where the kit lives (../LocalAI is tried too): run.ps1 starts it when it is not running
+agent_role = "agent"          # the kit's agent model: any model that can call tools
+stt_role = "stt-command"      # whisper tuned for short English commands (setup-kit.ps1 adds it); falls back to "stt"
 tts_role = "tts"
 voice = ""              # empty = the tts model's default voice
 max_tokens = 512
 temperature = 0.3
-# Extra fields sent with every chat request. LFM3 "thinks" for 40-80 hidden tokens before each answer unless
-# told not to: off, a tool call takes about 0.3 s instead of 0.8 s. Models without a thinking mode ignore it.
+# Extra fields sent with every chat request. Models with a thinking mode (LFM3, Qwen3...) write 40-80 hidden
+# tokens before each answer unless told not to: off, a tool call takes about 0.3 s instead of 0.8 s.
+# Models without a thinking mode ignore it.
 request = { chat_template_kwargs = { enable_thinking = false } }
 
 [listen]

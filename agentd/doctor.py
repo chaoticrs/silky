@@ -24,13 +24,14 @@ def report(cfg: dict, root: Path) -> int:
         served = kit.models() if up else set()
     except KitError:
         served = set()
-    for key, what, needed in (("agent_role", "the LLM", True), ("stt_role", "speech to text", True),
-                              ("tts_role", "speech", True)):
-        line(k[key] in served, f"role '{k[key]}' ({what})", "add a model for it in the kit: manage.ps1 add / role", needed and up)
+    for key, what in (("agent_role", "the LLM"), ("tts_role", "speech")):
+        line(k[key] in served, f"role '{k[key]}' ({what})", "add a model for it in the kit: manage.ps1 add / role", up)
+    line(k["stt_role"] in served or "stt" in served, "role 'stt' (speech to text)", "add a speech-to-text model in the kit", up)
+    line(k["stt_role"] in served, f"role '{k['stt_role']}' (faster on short commands)", "optional: run setup-kit.ps1", False)
     line(cfg["router"]["embed_role"] in served, f"role '{cfg['router']['embed_role']}' (fast path, file search, memory)",
-         "optional: without it those three switch themselves off", False)
+         "optional: run setup-kit.ps1 (without it those three switch themselves off)", False)
     line(cfg["decide"]["model"] in served, f"model '{cfg['decide']['model']}' (tool choice, screen)",
-         "optional: manage.ps1 add LiquidAI/d1-2B-GGUF --quant Q4_K_M --id d1", False)
+         "optional: run setup-kit.ps1", False)
 
     print("Sound")
     try:

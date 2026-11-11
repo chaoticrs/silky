@@ -1,0 +1,272 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Silky: launch film</title>
+<!--
+  Step 4 of the film: the picture. A 1920 x 1080 stage whose scenes follow out/timeline.json (make_audio.py).
+
+  The proof scenes are screen recordings of the assistant working (record.py, cut by cut.py), shown frame by
+  frame with the overlay corner enlarged beside them, and captioned with what the daemon itself reported in
+  that take: what it heard and how long each step took. A cut inside a shot is marked on screen.
+  The mesh in the opening and closing scenes is the real overlay page, running live in a frame.
+
+  render.mjs captures this page on a virtual clock. Served by `node render.mjs --serve` it plays in real time.
+-->
+<style>
+  :root { --bg: #07060d; --ink: #fbf7ff; --a: #ff3b6b; --b: #ff8a3b; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--ink);
+    font: 400 32px/1.25 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
+  .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+  .grad { background: linear-gradient(100deg, var(--a), var(--b)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  /* the room: three drifting pools of the scene's colours over a fine grid */
+  #room { position: absolute; inset: 0; overflow: hidden; }
+  #room i { position: absolute; width: 1100px; height: 1100px; border-radius: 50%; filter: blur(150px); opacity: .5; transition: background 1s; }
+  #room i:nth-child(1) { left: -350px; top: -420px; background: var(--a); animation: drift1 9s ease-in-out infinite alternate; }
+  #room i:nth-child(2) { right: -380px; bottom: -520px; background: var(--b); animation: drift2 11s ease-in-out infinite alternate; }
+  #room i:nth-child(3) { left: 700px; top: 300px; width: 700px; height: 700px; background: var(--a); opacity: .22; animation: drift1 7s ease-in-out infinite alternate-reverse; }
+  #room::after { content: ""; position: absolute; inset: 0; background:
+    linear-gradient(#ffffff09 1px, transparent 1px) 0 0 / 80px 80px, linear-gradient(90deg, #ffffff09 1px, transparent 1px) 0 0 / 80px 80px,
+    radial-gradient(80% 80% at 50% 50%, transparent 40%, #000000c0 100%); }
+  @keyframes drift1 { to { transform: translate(260px, 180px) scale(1.15); } }
+  @keyframes drift2 { to { transform: translate(-300px, -160px) scale(1.2); } }
+
+  .scene { position: absolute; inset: 0; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .scene.on { opacity: 1; }
+  /* "pop": hidden until its scene (and its own delay, --d) or until .wait is removed */
+  .pop { opacity: 0; transform: translateY(40px) scale(.96); transition: opacity .32s cubic-bezier(.2, .9, .2, 1.2), transform .32s cubic-bezier(.2, .9, .2, 1.2); }
+  .on .pop { opacity: 1; transform: none; transition-delay: var(--d, 0s); }
+  .pop.wait { opacity: 0 !important; transform: translateY(40px) scale(.96) !important; }
+  #caption { position: absolute; left: 0; right: 0; bottom: 30px; text-align: center; font-size: 28px; transition: opacity .15s; }
+  #caption span { background: #000000b8; padding: 7px 20px; border-radius: 10px; }
+  #caption b { font-weight: 600; color: var(--b); margin-right: .5em; }
+  #bar { position: absolute; left: 0; bottom: 0; height: 5px; background: linear-gradient(90deg, var(--a), var(--b)); }
+
+  /* hook */
+  #hook .word { position: absolute; left: 130px; top: 250px; font-size: 250px; font-weight: 800; letter-spacing: -.03em; line-height: .95; }
+  #hook .line { position: absolute; left: 140px; top: 520px; font-size: 62px; font-weight: 600; max-width: 900px; line-height: 1.12; }
+  #hook .only { position: absolute; left: 140px; top: 700px; font-size: 92px; font-weight: 800; letter-spacing: -.02em; }
+  #hook .watch { position: absolute; inset: 0; display: grid; place-items: center; font-size: 330px; font-weight: 800; letter-spacing: -.03em;
+    background: var(--bg); opacity: 0; }
+  #hook .watch.go { opacity: 1; }
+  .ov { position: absolute; width: 320px; height: 280px; transform-origin: 0 0; border-radius: 9px; opacity: 0;
+    box-shadow: 0 40px 140px #000, 0 0 120px color-mix(in srgb, var(--a) 45%, transparent); transition: opacity .4s; }
+  .ov.show { opacity: 1; }
+  .ov iframe { width: 320px; height: 280px; border: 0; border-radius: 9px; background: #050506; }
+  #silky { left: 1130px; top: 200px; transform: scale(2.15); }
+  #silky.end { left: 790px; top: 70px; transform: scale(1.06); }
+
+  /* footage */
+  #shot .card { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; transition: opacity .3s, transform .45s cubic-bezier(.3, .8, .2, 1); }
+  #shot .card .n { font: 800 150px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.04em; opacity: .9; }
+  #shot .card .t { font-size: 120px; font-weight: 800; letter-spacing: -.03em; line-height: 1.02; }
+  #shot.run .card { opacity: 0; transform: scale(1.25); }
+  #shot .head { position: absolute; left: 60px; top: 46px; display: flex; align-items: baseline; gap: 26px; opacity: 0; transition: opacity .3s .15s; }
+  #shot.run .head { opacity: 1; }
+  #shot .head .n { font: 800 110px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.04em; }
+  #shot .head .t { font-size: 74px; font-weight: 800; letter-spacing: -.025em; }
+  .badge { font: 600 19px/1 "Cascadia Mono", Consolas, monospace; letter-spacing: .16em; padding: 9px 14px; border-radius: 8px;
+    color: #06060a; background: linear-gradient(100deg, var(--a), var(--b)); }
+  #shot .live { position: absolute; left: 60px; top: 200px; display: flex; gap: 12px; opacity: 0; transition: opacity .3s .2s; }
+  #shot.run .live { opacity: 1; }
+  .badge.ghost { background: #ffffff1c; color: #fff; }
+  .frame { position: absolute; overflow: hidden; border-radius: 18px; background: #000; opacity: 0; transform: translateY(50px) scale(.97);
+    box-shadow: 0 30px 100px #000c, 0 0 0 2px color-mix(in srgb, var(--a) 70%, transparent), 0 0 90px color-mix(in srgb, var(--a) 35%, transparent);
+    transition: opacity .35s, transform .45s cubic-bezier(.2, .9, .2, 1.1); }
+  #shot.run .frame { opacity: 1; transform: none; }
+  #screen { left: 60px; top: 262px; width: 1236px; height: 657px; }
+  #screen img { width: 100%; height: 100%; display: block; }
+  #zoom { left: 1326px; top: 262px; width: 534px; height: 421px; transition-delay: .08s; }
+  #zoom img { position: absolute; left: -2136px; top: 0; width: 2670px; }           /* the overlay corner (x 1536-1920, y 0-303) at 1.39x */
+  #zoom::after { content: "THE OVERLAY, ENLARGED"; position: absolute; left: 12px; bottom: 10px; font: 13px "Cascadia Mono", Consolas, monospace; letter-spacing: .14em; color: #ffffff80; }
+  #cutmark { position: absolute; left: 80px; top: 282px; opacity: 0; transition: opacity .2s; }
+  #cutmark.go { opacity: 1; }
+  #notes { position: absolute; left: 1326px; top: 706px; width: 534px; display: flex; flex-direction: column; gap: 10px; }
+  .note { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 11px 18px; border-radius: 12px; font-size: 25px;
+    background: #ffffff12; border: 1px solid #ffffff22; animation: note .3s cubic-bezier(.2, .9, .2, 1.3); }
+  .note b { font: 600 30px "Cascadia Mono", Consolas, monospace; }
+  .note span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .note.heard { display: block; }
+  .note.heard span { display: block; font: 15px "Cascadia Mono", Consolas, monospace; letter-spacing: .16em; text-transform: uppercase; color: #ffffff90; }
+  .note.heard b { display: block; margin-top: 3px; font: 600 25px/1.25 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+  @keyframes note { from { opacity: 0; transform: translateX(40px); } }
+
+  /* numbers */
+  #speed .stat { position: absolute; top: 250px; width: 560px; }
+  #speed .num { font: 800 210px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.05em; }
+  #speed .num small { font-size: 90px; letter-spacing: -.02em; margin-left: 6px; }
+  #speed .what { margin-top: 14px; font-size: 44px; font-weight: 600; }
+  #speed .how { margin-top: 12px; font: 22px/1.5 "Cascadia Mono", Consolas, monospace; color: #ffffffa0; }
+  #speed .foot { position: absolute; left: 130px; top: 800px; font: 24px "Cascadia Mono", Consolas, monospace; color: #ffffffb0; letter-spacing: .04em; }
+
+  /* freedom */
+  #freedom .no { position: absolute; left: 130px; font-size: 128px; font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+  #freedom .no s { text-decoration-thickness: 10px; text-decoration-color: var(--a); color: #ffffff66; }
+  #freedom .yours { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; background: var(--bg); opacity: 0; transition: opacity .25s; }
+  #freedom .yours.go { opacity: 1; }
+  #freedom .yours div { font-size: 170px; font-weight: 800; letter-spacing: -.04em; line-height: 1.04; }
+
+  #end .word { position: absolute; left: 0; right: 0; top: 400px; text-align: center; font-size: 210px; font-weight: 800; letter-spacing: .12em; padding-left: .12em; }
+  #end .tag { position: absolute; left: 0; right: 0; top: 680px; text-align: center; font-size: 54px; font-weight: 600; }
+  #end .made { position: absolute; left: 0; right: 0; top: 860px; text-align: center; font: 23px/1.7 "Cascadia Mono", Consolas, monospace; color: #ffffffa8; }
+</style>
+
+<div id="room"><i></i><i></i><i></i></div>
+
+<section class="scene" id="hook">
+  <div class="word grad pop">SILKY</div>
+  <div class="line pop wait">A voice assistant that runs on your laptop.</div>
+  <div class="only grad pop wait">Only on your laptop.</div>
+  <div class="watch grad">Watch.</div>
+</section>
+
+<section class="scene" id="shot">
+  <div class="card"><div class="n grad"></div><div class="t"></div></div>
+  <div class="head"><div class="n grad"></div><div class="t"></div></div>
+  <div class="live"><span class="badge">&#9679; SCREEN RECORDING</span><span class="badge ghost" id="speedtag">REAL TIME</span></div>
+  <div class="frame" id="screen"><img alt=""></div>
+  <div class="frame" id="zoom"><img alt=""></div>
+  <span class="badge" id="cutmark"></span>
+  <div id="notes"></div>
+</section>
+
+<section class="scene" id="speed">
+  <div class="stat pop wait" style="left: 130px; --a: #22d3ee; --b: #6366f1"><div class="num grad"><small>&lt;</small>0.1<small>s</small></div><div class="what">a command it knows</div><div class="how">matched by embedding, no LLM<br>54 and 77 ms in the footage you just saw</div></div>
+  <div class="stat pop wait" style="left: 700px; --a: #f59e0b; --b: #ef4444"><div class="num grad"><small>&lt;</small>0.5<small>s</small></div><div class="what">choosing the right tool</div><div class="how">a decision model, no text generated<br>0.34 to 0.46 s in the footage</div></div>
+  <div class="stat pop wait" style="left: 1280px; --a: #a78bfa; --b: #ec4899"><div class="num grad">4<small>GB</small></div><div class="what">laptop graphics card</div><div class="how">RTX 3050 laptop GPU<br>every model loaded at once</div></div>
+  <div class="foot pop" style="--d: .5s">measured on the laptop that made this film</div>
+</section>
+
+<section class="scene" id="freedom">
+  <div class="no pop wait" style="top: 170px">No <s>account.</s></div>
+  <div class="no pop wait" style="top: 330px">No <s>subscription.</s></div>
+  <div class="no pop wait grad" style="top: 490px">Nobody listening.</div>
+  <div class="yours"><div class="pop wait">Your computer.</div><div class="pop wait">Your models.</div><div class="pop wait grad">Your rules.</div></div>
+</section>
+
+<section class="scene" id="end">
+  <div class="word grad pop" style="--d: .25s">SILKY</div>
+  <div class="tag pop" style="--d: .7s">Private, because there's nowhere else for it to go.</div>
+  <div class="made pop" style="--d: 1.3s">agentd &middot; runs on llama-swap-kit &middot; local models, open weights<br>
+    Recorded, voiced, scored and rendered on one laptop with a 4 GB GPU.</div>
+</section>
+
+<div class="ov" id="silky"><iframe src="/agentd/overlay/web/index.html"></iframe></div>
+<div id="caption"></div>
+<div id="bar"></div>
+<audio id="sound" src="out/soundtrack.wav" preload="auto"></audio>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const q = (sel, root = document) => [...root.querySelectorAll(sel)];
+let T0 = 0;                                   // performance.now() when the film started
+const at = (seconds, fn) => setTimeout(fn, Math.max(0, seconds * 1000 - performance.now() + T0));
+const ui = () => $("silky").firstElementChild.contentWindow.eval("ui");   // the overlay's `ui` is a const, not a window property
+const send = e => { try { ui().on(e); } catch (err) { console.error(err); } };
+const reveal = (el, seconds) => at(seconds, () => el.classList.remove("wait"));
+const COLOURS = { red: ["#ff3b6b", "#ff8a3b"], violet: ["#8b5cf6", "#ec4899"], amber: ["#f59e0b", "#ef4444"], green: ["#10b981", "#06b6d4"],
+                  blue: ["#38bdf8", "#6366f1"], pink: ["#ec4899", "#f97316"], gold: ["#fbbf24", "#f472b6"] };
+const SCENE_COLOUR = { hook: "red", speed: "gold", freedom: "red", end: "violet" };
+const caption = (who, text) => { $("caption").innerHTML = text ? `<span>${who ? `<b>${who}</b>` : ""}${text}</span>` : ""; $("caption").style.opacity = text ? 1 : 0; };
+const secs = ms => (ms / 1000).toFixed(ms < 995 ? 2 : 1) + " s";
+
+// loudness the live overlay is shown in the opening and closing scenes
+function speak(t0, t1) {
+  for (let t = t0; t < t1; t += 0.05) at(t, () => { const x = (t - t0) * 9, v = Math.abs(Math.sin(x) * Math.sin(x * .37 + 1)) * .8 + .1;
+    send({ type: "level", v, bands: [0, 1, 2, 3, 4, 5].map(b => Math.max(0, Math.sin(x * (.6 + b * .23) + b * 1.3)) * v) }); });
+  at(t1, () => send({ type: "state", s: "idle" }));
+}
+
+// ---- footage: one recorded shot, frame by frame, with what the daemon reported while it happened ----
+const frames = [];                            // [{ name, t0, frames }] : which frame of which shot is on screen when
+let pending = Promise.resolve();
+function showFrame(now) {
+  const f = frames.find(s => now >= s.t0 && now < s.t0 + s.frames / 30);
+  if (!f) return;
+  const src = `out/frames/${f.name}/${String(Math.min(f.frames, Math.floor((now - f.t0) * 30) + 1)).padStart(5, "0")}.jpg`;
+  if ($("screen").firstElementChild.getAttribute("src") === src) return;
+  pending = Promise.all(q("#screen img, #zoom img").map(img => { img.src = src; return img.decode().catch(() => {}); }));
+}
+const NOTE = {                                // a line of the take's log -> a line on screen
+  heard: n => ["it heard", `&ldquo;${n.text}&rdquo;`],
+  timing: n => n.step === "decide" ? ["tool chosen in", secs(n.ms)] : n.step === "route" ? ["matched, no LLM, in", secs(n.ms)] : null,
+  done: n => n.ms >= 5 ? [n.name.replace(/_/g, " ") + " took", secs(n.ms)] : null,
+  card: n => ["listed on screen", n.title],
+  cue: n => n.cue === "notify" ? ["noticed on the screen", "by itself"] : null,
+};
+function footage(scene, shot, index, total) {
+  frames.push({ name: shot.name, t0: shot.t0, frames: shot.frames });
+  at(shot.t0 - .02, () => { $("shot").classList.add("run"); $("notes").textContent = ""; showFrame(shot.t0);
+    $("speedtag").textContent = shot.parts[0].speed > 1 ? `SPED UP ${shot.parts[0].speed}x, SILENT` : "REAL TIME";
+    if (total > 1) q(".head .t")[0].textContent = scene.title.split(". ")[index].replace(/\.$/, "");
+    caption(shot.parts[0].speed === 1 ? "You" : "", shot.parts[0].speed === 1 ? shot.command : ""); });
+  for (const p of shot.parts.slice(1)) {      // a cut inside the shot: say so
+    at(shot.t0 + p.t, () => { $("cutmark").textContent = `CUT: ${p.skipped.toFixed(0)} s LATER`; $("cutmark").classList.add("go"); });
+    at(shot.t0 + p.t + 1.3, () => $("cutmark").classList.remove("go"));
+  }
+  for (const n of shot.notes) {
+    if (n.type === "said") { at(shot.t0 + n.t, () => caption(scene.id === "chimera" ? "Chimera" : "Silky", n.text.replace(/^"|"$/g, ""))); continue; }
+    const line = NOTE[n.type]?.(n);
+    if (line) at(shot.t0 + n.t, () => { const el = Object.assign(document.createElement("div"), { className: "note " + n.type });
+      if (n.type === "heard") caption("", "");
+      el.innerHTML = `<span>${line[0]}</span><b class="grad">${line[1]}</b>`; $("notes").append(el); [...$("notes").children].slice(0, -4).forEach(x => x.remove()); });
+  }
+}
+
+const SCENES = {
+  hook(s) {
+    const [a, b] = s.lines;
+    at(s.t0 + .15, () => { $("silky").className = "ov show"; send({ type: "visible", v: true }); send({ type: "state", s: "speaking" }); });
+    speak(a.t0, b.t1 - .7);
+    reveal(q(".line", $("hook"))[0], a.t0 + 1.0);
+    reveal(q(".only", $("hook"))[0], b.t0);
+    at(b.t1 - .62, () => { q(".watch", $("hook"))[0].classList.add("go"); $("silky").classList.remove("show"); });
+  },
+  speed(s) {
+    const [a, b] = s.lines, stats = q(".stat", $("speed"));
+    reveal(stats[0], a.t0 + .1); reveal(stats[1], a.t0 + (a.t1 - a.t0) * .55); reveal(stats[2], b.t0 + .2);
+  },
+  freedom(s) {
+    const [a, b] = s.lines;
+    q(".no", $("freedom")).forEach((el, i) => reveal(el, a.t0 + (a.t1 - a.t0) * i / 3));
+    at(b.t0 - .1, () => q(".yours", $("freedom"))[0].classList.add("go"));
+    q(".yours div", $("freedom")).forEach((el, i) => reveal(el, b.t0 + (b.t1 - b.t0) * i / 3));
+  },
+  end(s) {
+    at(s.t0 + .1, () => { $("silky").className = "ov end show"; send({ type: "visible", v: false }); send({ type: "visible", v: true }); send({ type: "state", s: "speaking" }); });
+    speak(s.lines[0].t0, s.lines[0].t1);
+  },
+};
+
+window.film = {
+  ready: () => { try { return !!ui(); } catch { return false; } },
+  settled: () => pending,                     // render.mjs waits for this before it captures a frame
+  start(timeline, sound) {
+    T0 = performance.now();
+    let number = 0;
+    for (const s of timeline.scenes) {
+      const el = s.shots.length ? $("shot") : $(s.id);
+      at(s.t0, () => { q(".scene.on").forEach(x => x.classList.remove("on")); el.classList.add("on"); caption("", "");
+        const [a, b] = COLOURS[SCENE_COLOUR[s.id] || s.colour] || COLOURS.red;
+        document.documentElement.style.setProperty("--a", a); document.documentElement.style.setProperty("--b", b); });
+      if (s.shots.length) {
+        const label = s.shots[0].t0 - s.t0 > .5 ? String(++number).padStart(2, "0") : "+";   // a title card first = a numbered proof
+        at(s.t0, () => { $("shot").classList.remove("run"); q("#shot .n").forEach(x => x.textContent = label); q("#shot .t").forEach(x => x.textContent = s.title); });
+        s.shots.forEach((shot, i) => footage(s, shot, i, s.shots.length));
+      } else SCENES[s.id](s);
+      for (const line of s.lines) {           // narration is captioned too
+        at(line.t0, () => caption("", line.text));
+        at(line.t1 + .25, () => caption("", ""));
+      }
+    }
+    const total = timeline.length * 1000;
+    (function tick() { const now = (performance.now() - T0) / 1000; $("bar").style.width = Math.min(100, now * 1000 / total * 100) + "%";
+      showFrame(now); requestAnimationFrame(tick); })();
+    if (sound) $("sound").play();
+  },
+};
+addEventListener("load", () => setTimeout(() => {
+  if (location.search.includes("play")) fetch("out/timeline.json").then(r => r.json()).then(tl =>
+    document.body.addEventListener("click", () => film.start(tl, true), { once: true }));
+}, 300));
+</script>

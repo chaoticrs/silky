@@ -7,12 +7,12 @@ if (-not (Test-Path $python)) { throw 'Not set up yet. Run: powershell -Executio
 # the kit's address and folder come from config.toml ([kit] url / folder)
 $config = Get-Content "$PSScriptRoot\config.toml" -Raw
 $url = if ($config -match '(?m)^url\s*=\s*"([^"]+)"') { $Matches[1] } else { 'http://127.0.0.1:8080' }
-$folder = if ($config -match '(?m)^folder\s*=\s*"([^"]+)"') { $Matches[1] } else { '..\LocalAI' }
+$folders = @(if ($config -match '(?m)^folder\s*=\s*"([^"]+)"') { $Matches[1] }) + '..\llama-swap-kit', '..\LocalAI'
 function Test-Kit { try { (Invoke-WebRequest "$url/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch { $false } }
 
 if (-not (Test-Kit)) {
-    $start = Join-Path (Resolve-Path (Join-Path $PSScriptRoot $folder) -ErrorAction SilentlyContinue) 'start.ps1'
-    if (-not $start -or -not (Test-Path $start)) { throw "The inference kit is not running and was not found at '$folder' (config.toml, [kit] folder)." }
+    $start = $folders | ForEach-Object { Join-Path $PSScriptRoot "$_\start.ps1" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $start) { throw "The inference kit is not running and was not found next to this folder. Set it up (https://github.com/chaoticrs/llama-swap-kit) or point [kit] folder in config.toml at it." }
     Write-Host 'Starting the inference kit...'
     Start-Process powershell -WindowStyle Minimized -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$start`""
     foreach ($i in 1..60) { if (Test-Kit) { break }; Start-Sleep 1 }

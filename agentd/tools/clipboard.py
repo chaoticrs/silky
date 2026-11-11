@@ -16,6 +16,7 @@ _k.GlobalAlloc.restype = _k.GlobalLock.restype = ctypes.c_void_p
 _k.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 _k.GlobalLock.argtypes = _k.GlobalUnlock.argtypes = [ctypes.c_void_p]
 _TEXT, _CTRL, _LIMIT = 13, 0x11, 6000  # CF_UNICODETEXT, VK_CONTROL, characters handed to the model
+_pasted = ("", 0)                      # what paste_text typed last, and in which 15 s window
 
 
 def _open() -> bool:
@@ -89,6 +90,10 @@ def copy_selection() -> str:
 @tool("Type text into the window the user is working in, replacing what is selected there. "
       "Use after rewriting or fixing the selection, or when asked to paste or insert something.")
 def paste_text(text: str) -> str:
+    global _pasted
+    if _pasted == (text, int(time.time() / 15)):  # a small model sometimes pastes its own rewrite a second time
+        return "already pasted a moment ago; nothing more to do"
+    _pasted = (text, int(time.time() / 15))
     if not set_text(text):
         return "error: clipboard busy"
     time.sleep(0.05)

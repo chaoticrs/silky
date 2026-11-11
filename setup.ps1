@@ -1,10 +1,16 @@
 # One-time setup: Python environment (.venv) + the wake-word model (17 MB) and end-of-turn model (9 MB).
+# Needs llama-swap-kit (https://github.com/chaoticrs/llama-swap-kit) set up in a folder next to this one.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+# uv builds the Python environment. Use the one on PATH, or the one the kit ships.
 $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
-if (-not $uv) { $uv = Join-Path $PSScriptRoot '..\LocalAI\bin\uv\uv.exe' }   # the kit ships uv
-if (-not (Test-Path $uv)) { throw 'uv not found. Install it (https://docs.astral.sh/uv/) or set up llama-swap-kit first.' }
+foreach ($kit in '..\llama-swap-kit', '..\LocalAI') {
+    if (-not $uv -and (Test-Path "$PSScriptRoot\$kit\bin\uv\uv.exe")) { $uv = "$PSScriptRoot\$kit\bin\uv\uv.exe" }
+}
+if (-not $uv) {
+    throw "uv was not found. Either set up llama-swap-kit in a folder next to this one (it ships uv), or install uv: https://docs.astral.sh/uv/"
+}
 & $uv sync
 if ($LASTEXITCODE) { throw 'uv sync failed' }
 
@@ -24,4 +30,8 @@ if (-not (Test-Path $turn)) {   # Smart Turn v3.2 (Pipecat, BSD-2-Clause): has t
     curl.exe -L --fail -o $turn 'https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx'
     if ($LASTEXITCODE) { throw 'end-of-turn model download failed' }
 }
-Write-Host 'Ready. Start the inference kit, then run .\run.ps1'
+Write-Host ''
+Write-Host 'Ready. Next:'
+Write-Host '  .\setup-kit.ps1      adds the models for instant commands, file search and the screen (recommended, 1.6 GB)'
+Write-Host '  .\run.ps1 --doctor   checks everything'
+Write-Host '  .\run.ps1            starts the assistant: say "Silky"'

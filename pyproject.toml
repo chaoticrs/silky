@@ -1,7 +1,8 @@
 [project]
 name = "agentd"
 version = "0.1.0"
-description = "Local voice agent daemon: wake word -> speech -> tools -> speech, on top of llama-swap-kit"
+description = "Silky: a local voice assistant for Windows (wake word -> speech -> tools -> speech) on top of llama-swap-kit"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",

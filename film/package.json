@@ -1,0 +1,9 @@
+{
+  "name": "silky-film",
+  "private": true,
+  "description": "Build-time only: renders the launch film (film.html) frame by frame in headless Edge",
+  "type": "module",
+  "devDependencies": {
+    "puppeteer-core": "24.10.0"
+  }
+}

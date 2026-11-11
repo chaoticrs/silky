@@ -51,6 +51,12 @@ class Daemon:
         self._ui, self._mic, self._wake, self._tag, self._persona = ui, mic, None, "", ""
         self._busy, self._background = threading.RLock(), threading.local()  # one turn at a time; see announce
         self._decide, self.features = cfg["decide"], []
+        paths = cfg.get("paths", {})  # optional [paths] data / index: other folders for what it stores (demos, tests)
+        self._data, self._index_dir = ROOT / paths.get("data", "data"), ROOT / paths.get("index", "index")
+        served = kit.models()
+        if k["stt_role"] not in served and "stt" in served:   # the tuned role is an extra (setup-kit.ps1)
+            log(f"kit has no '{k['stt_role']}' role: using 'stt' (slower on short commands)")
+            k = k | {"stt_role": "stt"}
         self._stt = KitStt(kit, k["stt_role"])
         self._listener = Listener(self._l["min_rms"], self._l["silence_s"], self._l["max_s"],
                                   self._turn_model(), self._l["quick_s"], self._l["sure"])
@@ -62,12 +68,17 @@ class Daemon:
 
         # ---- tools that need a live brick: each install() registers them (see tools/__init__.py) ----
         embedder = KitEmbedder(kit, cfg["router"]["embed_role"])
+        if cfg["router"]["embed_role"] not in served:          # an extra (setup-kit.ps1): three features need it
+            log(f"kit has no '{cfg['router']['embed_role']}' role: instant commands, file search and memory are off")
+            cfg = cfg | {"search": cfg["search"] | {"enabled": False}, "memory": {"enabled": False},
+                         "router": cfg["router"] | {"enabled": False}}
         self.index = self._add_search(embedder, cfg["search"])
         self._decider = self._make_decider(kit)
         check = self._add_sight(cfg["sight"])
-        self._reminders = reminders.install(self, ROOT / "data" / "reminders.json")
+        linked.install_rewrite(KitLlm(kit, k["agent_role"], k["max_tokens"], 0.0, k.get("request")))
+        self._reminders = reminders.install(self, self._data / "reminders.json")
         if cfg["memory"]["enabled"]:
-            memory.install(embedder, ROOT / "data")
+            memory.install(embedder, self._data)
             self.features.append("memory")
 
         self._speaker = None if mute else Speaker(
@@ -105,7 +116,7 @@ class Daemon:
         if not s["enabled"]:
             return None
         from .index import FileIndex
-        index = FileIndex(embedder, ROOT / "index", [files.resolve(f) for f in s["folders"]], s["max_files"])
+        index = FileIndex(embedder, self._index_dir, [files.resolve(f) for f in s["folders"]], s["max_files"])
         linked.install_search(index)
         self.features.append("file search")
         return index
@@ -113,6 +124,8 @@ class Daemon:
     def _make_decider(self, kit: Kit):
         if not self._decide["enabled"]:
             return None
+        if self._decide["model"] not in kit.models():          # an extra (setup-kit.ps1)
+            return log(f"kit has no '{self._decide['model']}' model: the LLM picks tools by itself, screen features are off")
         decider = KitDecider(kit, self._decide["model"])
         try:  # also loads it, so the first real decision is fast
             decider.decide({"ok": {"type": "noul", "instructions": "Is this a greeting?"}}, state="hello")

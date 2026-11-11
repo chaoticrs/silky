@@ -233,7 +233,8 @@ function frame(now) {
   if (!visible || skin) return;
   const dt = Math.min(.05, (now - last) / 1000); last = now;
   boot = Math.min(1, boot + dt / .8);
-  hue += (((PERSONA_HUES[persona] || HUES)[state] ?? 215) - hue) * Math.min(1, dt * 5);
+  const turn = ((((PERSONA_HUES[persona] || HUES)[state] ?? 356) - hue + 540) % 360) - 180;   // the short way round the wheel:
+  hue = (hue + turn * Math.min(1, dt * 5) + 360) % 360;                                       // 356 -> 0 must not pass through cyan
   document.documentElement.style.setProperty("--hue", hue.toFixed(0));
   drive(dt); flash *= Math.exp(-dt * 4);
 
