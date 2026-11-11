@@ -1,0 +1,260 @@
+"""The explainer's soundtrack, all made on this PC: narration from the kit's TTS, UI sound effects and a quiet pad.
+
+Writes out/explainer.wav (48 kHz stereo) and out/timeline.json: when each phrase starts and ends, an estimate of
+when each word is spoken (for the kinetic type), and when each effect lands. explainer.html and render.mjs
+follow the timeline.        run:  ..\\..\\.venv\\Scripts\\python.exe make_audio.py      (needs the kit running)
+"""
+import hashlib
+import json
+import re
+import sys
+import wave
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent.parent))
+sys.path.insert(0, str(HERE))
+from agentd.kit import Kit, KitVoice  # noqa: E402
+from beats import GAP, LENGTH, PHRASES, SFX  # noqa: E402
+
+SR = 48000
+OUT = HERE / "out"
+CLIPS = OUT / "clips"
+VOICE = "juno"
+rng = np.random.default_rng(11)
+
+
+# ---------------------------------------------------------------- helpers
+def resample(x: np.ndarray, sr: int) -> np.ndarray:
+    if sr == SR:
+        return x.astype(np.float32)
+    n = int(round(len(x) * SR / sr))
+    spec = np.fft.rfft(x)
+    out = np.zeros(n // 2 + 1, complex)
+    m = min(len(spec), len(out))
+    out[:m] = spec[:m]
+    return (np.fft.irfft(out, n) * (n / len(x))).astype(np.float32)
+
+
+def onepole(x: np.ndarray, hz: float, high: bool = False) -> np.ndarray:
+    f = np.fft.rfftfreq(len(x), 1 / SR)
+    gain = 1 / np.sqrt(1 + (f / hz) ** 2)
+    return np.fft.irfft(np.fft.rfft(x) * (np.sqrt(1 - gain ** 2) if high else gain), len(x)).astype(np.float32)
+
+
+def smooth(x: np.ndarray, seconds: float) -> np.ndarray:
+    k = max(1, int(seconds * SR))
+    c = np.cumsum(np.concatenate([np.zeros(1), x.astype(np.float64)]))
+    out = (c[k:] - c[:-k]) / k
+    return np.concatenate([np.full(k // 2, out[0]), out, np.full(len(x) - len(out) - k // 2, out[-1])]).astype(np.float32)
+
+
+def place(track: np.ndarray, clip: np.ndarray, at: float, gain: float = 1.0, pan: float = 0.0) -> None:
+    i = int(at * SR)
+    if i < 0:
+        clip, i = clip[-i:], 0
+    clip = clip[:max(0, len(track) - i)]
+    track[i:i + len(clip), 0] += clip * gain * np.sqrt((1 - pan) / 2)
+    track[i:i + len(clip), 1] += clip * gain * np.sqrt((1 + pan) / 2)
+
+
+def write_wav(path: Path, x: np.ndarray) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+
+
+def t_(seconds: float) -> np.ndarray:
+    return np.arange(int(seconds * SR)) / SR
+
+
+# ---------------------------------------------------------------- narration
+def syllables(word: str) -> int:
+    return max(1, len(re.findall(r"[aeiouy]+", word.lower().rstrip("e"))))
+
+
+def word_times(pcm: np.ndarray, text: str) -> list:
+    """Estimate when each word is said: spread the words, weighted by syllables, over the voiced stretches of the
+    clip, with the pauses between stretches left out. Good to a word or so, which is what the type needs."""
+    hop = int(0.01 * SR)
+    rms = np.sqrt(np.convolve(pcm ** 2, np.ones(hop) / hop, "same")[::hop])
+    voiced = rms > max(0.008, 0.08 * rms.max())
+    # fill gaps shorter than 70 ms: those are inside words, not between them
+    idx = np.flatnonzero(voiced)
+    for a, b in zip(idx[:-1], idx[1:]):
+        if 1 < b - a <= 7:
+            voiced[a:b] = True
+    frames = np.flatnonzero(voiced)                     # the instants that carry speech, in order
+    words = text.split()
+    weight = np.array([syllables(w) + (0.6 if w[-1] in ",.?" else 0) for w in words], float)
+    edges = np.concatenate([[0], np.cumsum(weight)]) / weight.sum()
+    pos = lambda f: frames[min(len(frames) - 1, int(f * (len(frames) - 1)))] * hop / SR
+    return [{"w": w, "t0": round(pos(edges[i]), 3), "t1": round(pos(edges[i + 1]), 3)} for i, w in enumerate(words)]
+
+
+def narration():
+    CLIPS.mkdir(parents=True, exist_ok=True)
+    voice = KitVoice(Kit("http://127.0.0.1:8080"), "tts", VOICE)
+    phrases, clips, free = [], [], 0.0
+    for pid, at, text in PHRASES:
+        key = CLIPS / (hashlib.sha1(f"{VOICE}|{text}".encode()).hexdigest()[:12] + ".npy")
+        if not key.exists():
+            pcm, sr = voice.synth(text)
+            pcm = resample(pcm, sr)
+            loud = np.flatnonzero(np.abs(pcm) > 0.01)
+            np.save(key, pcm[max(0, loud[0] - 960):loud[-1] + 2400])  # trim, keep 20 ms before and 50 ms after
+        pcm = np.load(key)
+        start = max(at, free)
+        if start > at + 0.01:
+            print(f"  {pid} moved {start - at:+.2f} s: the phrase before it is still speaking")
+        end = start + len(pcm) / SR
+        words = [{**w, "t0": round(start + w["t0"], 3), "t1": round(start + w["t1"], 3)} for w in word_times(pcm, text)]
+        phrases.append({"id": pid, "text": text, "t0": round(start, 3), "t1": round(end, 3), "words": words})
+        clips.append((start, pcm))
+        free = end + GAP
+        print(f"  {pid:4s} {start:6.2f} - {end:6.2f}  {text}")
+    if free - GAP > LENGTH - 1.5:
+        raise SystemExit(f"the voiceover runs to {free - GAP:.1f} s; tighten PHRASES so it ends before {LENGTH - 1.5:.1f} s")
+    track = np.zeros((int(LENGTH * SR), 2), np.float32)
+    for start, pcm in clips:
+        pcm = onepole(pcm, 80, high=True)
+        loud = pcm[np.abs(pcm) > 0.004]
+        pcm = np.tanh(pcm / (np.sqrt(np.mean(loud ** 2)) + 1e-9) * 0.16 * 2.2) / 2.2   # level every phrase, tame peaks
+        place(track, pcm, start)
+    return track, phrases
+
+
+# ---------------------------------------------------------------- effects: short, crisp, quiet
+def env(seconds: float, attack: float, decay: float) -> np.ndarray:
+    t = t_(seconds)
+    return (np.minimum(1, t / max(attack, 1e-4)) * np.exp(-t / decay)).astype(np.float32)
+
+
+def click(pitch=2400.0, gain=0.5):
+    t = t_(0.05)
+    body = np.sin(2 * np.pi * pitch * t) * env(0.05, 0.0005, 0.008)
+    snap = onepole(rng.standard_normal(len(t)).astype(np.float32), 3000, high=True) * env(0.05, 0.0002, 0.003)
+    return (body * 0.7 + snap * 0.5).astype(np.float32) * gain
+
+
+def swoosh(seconds=0.5, reverse=False):
+    n = int(seconds * SR)
+    noise = rng.standard_normal(n).astype(np.float32)
+    shape = np.sin(np.linspace(0, np.pi, n)) ** 2
+    shape = shape * (np.linspace(0.3, 1, n) if not reverse else np.linspace(1, 0.3, n))
+    # the brightness follows the swell: mix a dark and a bright copy by the envelope
+    dark, bright = onepole(onepole(noise, 900), 900), onepole(onepole(noise, 4200), 300, high=True)
+    out = (dark * (1 - shape) + bright * shape) * shape
+    out = out[::-1] if reverse else out
+    return (out / np.abs(out).max() * 0.35).astype(np.float32)
+
+
+def pop():
+    t = t_(0.12)
+    f = 300 + 700 * np.exp(-t / 0.02)
+    return (np.sin(2 * np.pi * np.cumsum(f) / SR) * env(0.12, 0.001, 0.035)).astype(np.float32) * 0.45
+
+
+def bell(notes, decay=0.5, gain=0.25):
+    out = np.zeros(int((0.12 * len(notes) + decay * 3) * SR), np.float32)
+    for i, f in enumerate(notes):
+        t = t_(decay * 3)
+        tone = (np.sin(2 * np.pi * f * t) + 0.35 * np.sin(2 * np.pi * f * 2.76 * t) * np.exp(-t / 0.08)) * env(decay * 3, 0.002, decay)
+        out[int(i * 0.12 * SR):int(i * 0.12 * SR) + len(t)] += tone.astype(np.float32)
+    return out * gain
+
+
+def roll(seconds=1.0):
+    out = np.zeros(int((seconds + 0.06) * SR), np.float32)
+    at = 0.0
+    while at < seconds:
+        c = click(3600 + rng.uniform(-200, 200), 0.18)
+        out[int(at * SR):int(at * SR) + len(c)] += c
+        at += 0.045 + 0.04 * (at / seconds) ** 2        # slows as the number settles
+    return out
+
+
+def thump():
+    t = t_(0.5)
+    f = 48 + 60 * np.exp(-t / 0.03)
+    return (np.sin(2 * np.pi * np.cumsum(f) / SR) * env(0.5, 0.002, 0.13)).astype(np.float32) * 0.8
+
+
+SOUNDS = {
+    "click": lambda: click(), "tick": lambda: click(3800, 0.3), "pop": pop, "roll": roll, "thump": thump,
+    "swoosh": lambda: swoosh(), "rswoosh": lambda: swoosh(0.45, reverse=True),
+    "ding": lambda: bell([1318.5, 1975.5], 0.35, 0.18), "ping": lambda: bell([1760.0, 2637.0], 0.3, 0.18),
+}
+
+
+def effects(phrases):
+    starts = {p["id"]: p["t0"] for p in phrases}
+    fx, events = np.zeros((int(LENGTH * SR), 2), np.float32), []
+    for anchor, offset, kind in SFX:
+        at = (starts[anchor] if isinstance(anchor, str) else anchor) + offset
+        pan = {"swoosh": -0.3, "rswoosh": 0.3}.get(kind, rng.uniform(-0.25, 0.25))
+        place(fx, SOUNDS[kind](), at, pan=pan)
+        events.append({"t": round(at, 3), "kind": kind})
+    return fx, events
+
+
+# ---------------------------------------------------------------- music: a soft major-key pad and a slow pulse
+hz = lambda note: 440 * 2 ** ((note - 69) / 12)
+CHORDS = [(48, 55, 59, 64), (45, 52, 55, 60), (41, 48, 52, 57), (43, 50, 55, 59)]   # Cmaj7 Am7 Fmaj7 G
+
+
+def tone(freq, seconds, harmonics, rolloff, detune=0.0):
+    t = t_(seconds)
+    out = np.zeros(len(t), np.float32)
+    for k in range(1, harmonics + 1):
+        out += (np.sin(2 * np.pi * freq * k * (1 + detune) * t + rng.uniform(0, 6.28)) / k ** rolloff).astype(np.float32)
+    return out
+
+
+def music():
+    n, bar = int(LENGTH * SR), 60 / 96 * 4
+    pad, pulse = np.zeros((n, 2), np.float32), np.zeros((n, 2), np.float32)
+    for b in range(int(LENGTH / bar) + 1):
+        chord, at = CHORDS[b % 4], b * bar
+        t = t_(bar + 1.5)
+        swell = (np.minimum(1, t / 1.2) * np.minimum(1, (bar + 1.5 - t) / 1.5)).astype(np.float32)
+        for note in chord:
+            for side, detune in ((-0.6, -0.002), (0.6, 0.002)):
+                place(pad, tone(hz(note + 12), bar + 1.5, 6, 1.8, detune) * swell * 0.03, at, pan=side)
+        place(pad, tone(hz(chord[0] - 12), bar + 1.5, 3, 2.0) * swell * 0.06, at)
+        for beat in range(4):                                                  # a soft felt-piano-like pulse
+            note = chord[(beat * 2 + 1) % 4] + 24
+            tp = t_(1.0)
+            pluck = (np.sin(2 * np.pi * hz(note) * tp) * np.exp(-tp / 0.35)).astype(np.float32) * 0.035
+            place(pulse, onepole(pluck, 2500), at + beat * bar / 4, pan=0.4 * (-1) ** beat)
+    t = np.arange(n) / SR
+    mix = pad + pulse
+    ir = (rng.standard_normal(int(2.0 * SR)) * np.exp(-np.arange(int(2.0 * SR)) / (0.5 * SR))).astype(np.float32)
+    size = n + len(ir)
+    wet = np.stack([np.fft.irfft(np.fft.rfft(mix[:, c], size) * np.fft.rfft(ir * (1 if c else -1), size), size)[:n] for c in (0, 1)], 1)
+    mix += (wet / np.abs(wet).max() * 0.12).astype(np.float32)
+    # quiet in the problem beat, fuller from "Meet Silky", resolves at the end
+    level = np.interp(t, [0, 9.8, 10.6, 50, 57, LENGTH], [0.45, 0.45, 1.0, 1.0, 1.1, 0.0])
+    fade = np.minimum(1, t / 1.0)
+    return mix * (level * fade)[:, None].astype(np.float32)
+
+
+if __name__ == "__main__":
+    OUT.mkdir(exist_ok=True)
+    print("narration (synthesized once, then cached in out/clips)")
+    voice, phrases = narration()
+    fx, events = effects(phrases)
+    bed = music()
+    level = np.sqrt(smooth(np.mean(voice ** 2, axis=1), 0.2))
+    duck = smooth(1 - 0.6 * np.clip(level / 0.04, 0, 1), 0.3)
+    db = lambda d: 10 ** (d / 20)
+    final = voice * 1.25 + bed * duck[:, None] * db(-6) + fx * db(-7)
+    final = np.tanh(final * 1.1) / np.tanh(1.1)
+    final *= 0.89 / np.abs(final).max()
+    write_wav(OUT / "explainer.wav", final)
+    (OUT / "timeline.json").write_text(json.dumps({"fps": 30, "length": LENGTH, "phrases": phrases, "sfx": events}, indent=1))
+    print(f"out/explainer.wav and out/timeline.json: {LENGTH:.0f} s")

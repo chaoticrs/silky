@@ -12,3 +12,4 @@ engines/*.log
 engines/chimera-head/node_modules/
 film/out/
 film/node_modules/
+film/explainer/out/
